@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:gate_pass_flutter/screens/profile/profile_page.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import 'providers/auth_provider.dart';
@@ -45,17 +46,17 @@ class MyApp extends StatelessWidget {
       redirect: (context, state) {
         final isLoggedIn = authProvider.isLoggedIn;
         final user = authProvider.user;
-        
+
         // If not logged in and trying to access protected route
         if (!isLoggedIn && !_isPublicRoute(state.matchedLocation)) {
           return '/login';
         }
-        
+
         // If logged in and trying to access auth routes
         if (isLoggedIn && _isAuthRoute(state.matchedLocation)) {
           return _getDashboardRoute(user?.role ?? '');
         }
-        
+
         return null;
       },
       routes: [
@@ -86,6 +87,11 @@ class MyApp extends StatelessWidget {
         GoRoute(
           path: '/security',
           builder: (context, state) => const SecurityDashboard(),
+        ),
+        GoRoute(
+          path: '/profile',
+          name: 'profile',
+          builder: (context, state) => const ProfilePage(),
         ),
       ],
     );

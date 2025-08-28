@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:gate_pass_flutter/screens/profile/profile_page.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
+import '../../models/gate_pass_model.dart';
 import '../../models/user_model.dart';
 import '../../utils/theme.dart';
 import '../../widgets/custom_button.dart';
@@ -17,39 +20,68 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard>
     with TickerProviderStateMixin {
   late TabController _tabController;
+  late AnimationController _pulseController;
+  Timer? _autoRefreshTimer;
+
   List<User> _pendingTeachers = [];
   List<User> _allUsers = [];
+  List<GatePass> _allGatePasses = [];
   bool _isLoading = false;
-  User? _selectedUser;
-  String? _newRole;
+
+  // Search functionality
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String _selectedFilter = 'All';
+  List<String> _filterOptions = ['All', 'Students', 'Teachers', 'Security'];
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
+    _pulseController = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..repeat();
+
     _loadData();
+
+    // Auto-refresh every 45 seconds for admin dashboard
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 45), (timer) {
+      if (mounted) {
+        _loadData();
+      } else {
+        timer.cancel();
+      }
+    });
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _pulseController.dispose();
+    _autoRefreshTimer?.cancel();
+    _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-    
+
+    final gatePassProvider =
+        Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
     try {
       final futures = await Future.wait([
-        gatePassProvider.loadPendingTeachers(),
-        gatePassProvider.loadAllUsers(),
+        gatePassProvider.loadPendingTeachers(token: authProvider.token),
+        gatePassProvider.loadAllUsers(token: authProvider.token),
+        _loadAllGatePasses(),
       ]);
-      
+
       setState(() {
         _pendingTeachers = futures[0] as List<User>;
         _allUsers = futures[1] as List<User>;
+        _allGatePasses = futures[2] as List<GatePass>;
       });
     } catch (e) {
       debugPrint('Error loading admin data: $e');
@@ -58,25 +90,835 @@ class _AdminDashboardState extends State<AdminDashboard>
     }
   }
 
+  Future<List<GatePass>> _loadAllGatePasses() async {
+    // This would typically come from an admin-specific API endpoint
+    // For now, we'll simulate getting all gate passes
+    try {
+      final gatePassProvider =
+          Provider.of<GatePassProvider>(context, listen: false);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+      // Combine student passes, active passes, and scanned passes
+      final studentPasses =
+          await gatePassProvider.loadStudentPasses(token: authProvider.token);
+      final activePasses =
+          await gatePassProvider.loadActivePasses(token: authProvider.token);
+      final scannedPasses =
+          await gatePassProvider.loadScannedPasses(token: authProvider.token);
+
+      final allPasses = <GatePass>[];
+      allPasses.addAll(activePasses);
+      allPasses.addAll(scannedPasses);
+
+      // Remove duplicates based on ID
+      final uniquePasses = <String, GatePass>{};
+      for (final pass in allPasses) {
+        uniquePasses[pass.id] = pass;
+      }
+
+      return uniquePasses.values.toList()
+        ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    } catch (e) {
+      return [];
+    }
+  }
+
+  List<User> _getFilteredUsers() {
+    var filtered = _allUsers.where((user) {
+      final matchesSearch = user.name
+              .toLowerCase()
+              .contains(_searchQuery.toLowerCase()) ||
+          user.email.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          (user.rollNo?.toLowerCase().contains(_searchQuery.toLowerCase()) ??
+              false);
+
+      final matchesFilter = _selectedFilter == 'All' ||
+          (_selectedFilter == 'Students' && user.role == 'STUDENT') ||
+          (_selectedFilter == 'Teachers' && user.role == 'TEACHER') ||
+          (_selectedFilter == 'Security' && user.role == 'SECURITY');
+
+      return matchesSearch && matchesFilter;
+    }).toList();
+
+    return filtered..sort((a, b) => a.name.compareTo(b.name));
+  }
+
+  List<GatePass> _getFilteredGatePasses() {
+    return _allGatePasses.where((pass) {
+      final studentName = pass.student?.name.toLowerCase() ?? '';
+      final teacherName = pass.teacher?.name.toLowerCase() ?? '';
+      final reason = pass.reason.toLowerCase();
+      final rollNo = pass.student?.rollNo?.toLowerCase() ?? '';
+
+      return studentName.contains(_searchQuery.toLowerCase()) ||
+          teacherName.contains(_searchQuery.toLowerCase()) ||
+          reason.contains(_searchQuery.toLowerCase()) ||
+          rollNo.contains(_searchQuery.toLowerCase());
+    }).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              AppTheme.error.withOpacity(0.1),
+              AppTheme.backgroundLight,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              _buildHeader(),
+              _buildSearchBar(),
+              _buildQuickStats(),
+              _buildTabBar(),
+              Expanded(child: _buildTabViews()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [AppTheme.error, AppTheme.error.withOpacity(0.8)],
+              ),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.error.withOpacity(0.3),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: const Icon(Icons.admin_panel_settings,
+                color: Colors.white, size: 24),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Admin Control',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                      ),
+                ),
+                Text(
+                  'System Management',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppTheme.textSecondary,
+                      ),
+                ),
+              ],
+            ),
+          ),
+          // Refresh button
+          AnimatedBuilder(
+            animation: _pulseController,
+            builder: (context, child) {
+              return Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.success
+                          .withOpacity(0.4 * _pulseController.value),
+                      blurRadius: 15,
+                      spreadRadius: 3,
+                    ),
+                  ],
+                ),
+                child: IconButton(
+                  onPressed: _isLoading ? null : _loadData,
+                  icon: _isLoading
+                      ? SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppTheme.error,
+                          ),
+                        )
+                      : Icon(
+                          Icons.refresh,
+                          color: AppTheme.textPrimary,
+                          size: 28,
+                        ),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 12),
+          // ADD THIS: Admin Profile Button
+          Consumer<AuthProvider>(
+            builder: (context, authProvider, child) {
+              return GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ProfilePage()),
+                ),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [AppTheme.error, AppTheme.error.withOpacity(0.8)],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.error.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircleAvatar(
+                        radius: 14,
+                        backgroundColor: Colors.white,
+                        child: Text(
+                          authProvider.user?.name
+                                  .substring(0, 1)
+                                  .toUpperCase() ??
+                              'A',
+                          style: TextStyle(
+                            color: AppTheme.error,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(Icons.admin_panel_settings,
+                          color: Colors.white, size: 16),
+                    ],
+                  ),
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+      child: Row(
+        children: [
+          Expanded(
+            flex: 3,
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (value) => setState(() => _searchQuery = value),
+                decoration: InputDecoration(
+                  hintText: 'Search users, gate passes...',
+                  prefixIcon: Icon(Icons.search, color: AppTheme.textSecondary),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                          icon:
+                              Icon(Icons.clear, color: AppTheme.textSecondary),
+                        )
+                      : null,
+                  border: InputBorder.none,
+                  contentPadding:
+                      const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.05),
+                  blurRadius: 10,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: DropdownButton<String>(
+              value: _selectedFilter,
+              onChanged: (value) => setState(() => _selectedFilter = value!),
+              underline: const SizedBox(),
+              icon: Icon(Icons.filter_list, color: AppTheme.textSecondary),
+              items: _filterOptions.map((filter) {
+                return DropdownMenuItem(
+                  value: filter,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(filter),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickStats() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
+        children: [
+          Expanded(
+            child: _StatsCard(
+              title: 'Total Users',
+              value: _allUsers.length.toString(),
+              icon: Icons.people,
+              gradient: LinearGradient(
+                colors: [AppTheme.info, AppTheme.info.withOpacity(0.7)],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _StatsCard(
+              title: 'Pending Teachers',
+              value: _pendingTeachers.length.toString(),
+              icon: Icons.pending,
+              gradient: LinearGradient(
+                colors: [AppTheme.warning, AppTheme.warning.withOpacity(0.7)],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _StatsCard(
+              title: 'Total Passes',
+              value: _allGatePasses.length.toString(),
+              icon: Icons.assignment,
+              gradient: LinearGradient(
+                colors: [AppTheme.success, AppTheme.success.withOpacity(0.7)],
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _StatsCard(
+              title: 'Active Today',
+              value: _allGatePasses
+                  .where(
+                      (p) => DateUtils.isSameDay(p.createdAt, DateTime.now()))
+                  .length
+                  .toString(),
+              icon: Icons.today,
+              gradient: LinearGradient(
+                colors: [AppTheme.error, AppTheme.error.withOpacity(0.7)],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabBar() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 20, 20, 10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: TabBar(
+        controller: _tabController,
+        indicator: BoxDecoration(
+          color: AppTheme.error,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        labelColor: Colors.white,
+        unselectedLabelColor: AppTheme.textSecondary,
+        labelStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
+        tabs: [
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.pending_actions, size: 16),
+                const SizedBox(width: 4),
+                Text('Pending (${_pendingTeachers.length})'),
+              ],
+            ),
+          ),
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.people, size: 16),
+                const SizedBox(width: 4),
+                Text('Users (${_getFilteredUsers().length})'),
+              ],
+            ),
+          ),
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.assignment, size: 16),
+                const SizedBox(width: 4),
+                Text('Passes (${_getFilteredGatePasses().length})'),
+              ],
+            ),
+          ),
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.analytics, size: 16),
+                const SizedBox(width: 4),
+                const Text('Analytics'),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabViews() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      child: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildPendingTeachersTab(),
+          _buildUsersTab(),
+          _buildGatePassesTab(),
+          _buildAnalyticsTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPendingTeachersTab() {
+    if (_pendingTeachers.isEmpty) {
+      return _EmptyState(
+        icon: Icons.pending_actions,
+        title: 'No Pending Teachers',
+        subtitle: 'All teacher applications have been reviewed',
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: AppTheme.error,
+      child: ListView.builder(
+        itemCount: _pendingTeachers.length,
+        itemBuilder: (context, index) {
+          return _PendingTeacherCard(
+            teacher: _pendingTeachers[index],
+            onApprove: () => _approveTeacher(_pendingTeachers[index].id),
+            onReject: () => _rejectTeacher(_pendingTeachers[index].id),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildUsersTab() {
+    final filteredUsers = _getFilteredUsers();
+
+    if (filteredUsers.isEmpty) {
+      return _EmptyState(
+        icon: Icons.people,
+        title: 'No Users Found',
+        subtitle: _searchQuery.isNotEmpty
+            ? 'Try adjusting your search terms'
+            : 'No users match the selected filter',
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: AppTheme.error,
+      child: ListView.builder(
+        itemCount: filteredUsers.length,
+        itemBuilder: (context, index) {
+          return _UserCard(user: filteredUsers[index]);
+        },
+      ),
+    );
+  }
+
+  Widget _buildGatePassesTab() {
+    final filteredPasses = _getFilteredGatePasses();
+
+    if (filteredPasses.isEmpty) {
+      return _EmptyState(
+        icon: Icons.assignment,
+        title: 'No Gate Passes Found',
+        subtitle: _searchQuery.isNotEmpty
+            ? 'Try different search terms'
+            : 'No gate passes available',
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: AppTheme.error,
+      child: ListView.builder(
+        itemCount: filteredPasses.length,
+        itemBuilder: (context, index) {
+          return _GatePassCard(gatePass: filteredPasses[index]);
+        },
+      ),
+    );
+  }
+
+  Widget _buildAnalyticsTab() {
+    final todayPasses = _allGatePasses
+        .where((p) => DateUtils.isSameDay(p.createdAt, DateTime.now()))
+        .length;
+    final approvedPasses = _allGatePasses.where((p) => p.isApproved).length;
+    final pendingPasses = _allGatePasses.where((p) => p.isPending).length;
+    final rejectedPasses = _allGatePasses.where((p) => p.isRejected).length;
+
+    return SingleChildScrollView(
+      child: Column(
+        children: [
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: _AnalyticsCard(
+                  title: 'Today\'s Passes',
+                  value: todayPasses.toString(),
+                  icon: Icons.today,
+                  color: AppTheme.info,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _AnalyticsCard(
+                  title: 'Approved',
+                  value: approvedPasses.toString(),
+                  icon: Icons.check_circle,
+                  color: AppTheme.success,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _AnalyticsCard(
+                  title: 'Pending',
+                  value: pendingPasses.toString(),
+                  icon: Icons.pending,
+                  color: AppTheme.warning,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _AnalyticsCard(
+                  title: 'Rejected',
+                  value: rejectedPasses.toString(),
+                  icon: Icons.cancel,
+                  color: AppTheme.error,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+          _buildTopTeachersCard(),
+          const SizedBox(height: 20),
+          _buildRecentActivityCard(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTopTeachersCard() {
+    final teacherStats = <String, Map<String, dynamic>>{};
+
+    for (final pass in _allGatePasses.where((p) => p.teacher != null)) {
+      final teacherId = pass.teacher!.id;
+      final teacherName = pass.teacher!.name;
+
+      if (teacherStats.containsKey(teacherId)) {
+        teacherStats[teacherId]!['count']++;
+        if (pass.isApproved) teacherStats[teacherId]!['approved']++;
+      } else {
+        teacherStats[teacherId] = {
+          'name': teacherName,
+          'count': 1,
+          'approved': pass.isApproved ? 1 : 0,
+        };
+      }
+    }
+
+    final sortedTeachers = teacherStats.entries.toList()
+      ..sort((a, b) => b.value['count'].compareTo(a.value['count']));
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.star, color: AppTheme.warning, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Top Teachers by Gate Pass Activity',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            ...sortedTeachers.take(5).map((entry) {
+              final teacher = entry.value;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: AppTheme.warning.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Center(
+                        child: Text(
+                          teacher['name']
+                              .toString()
+                              .substring(0, 1)
+                              .toUpperCase(),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.warning,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            teacher['name'].toString(),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            '${teacher['approved']} approved / ${teacher['count']} total',
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppTheme.success.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        teacher['count'].toString(),
+                        style: TextStyle(
+                          color: AppTheme.success,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRecentActivityCard() {
+    final recentPasses = _allGatePasses.take(10).toList();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.history, color: AppTheme.info, size: 20),
+                const SizedBox(width: 8),
+                Text(
+                  'Recent Activity',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: AppTheme.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            ...recentPasses.map((pass) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: _getStatusColor(pass.status),
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${pass.student?.name ?? 'Unknown'} → ${pass.teacher?.name ?? 'Unknown Teacher'}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                          Text(
+                            '${pass.statusDisplayName} • ${DateFormat('MMM dd, HH:mm').format(pass.createdAt)}',
+                            style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'APPROVED':
+        return AppTheme.success;
+      case 'REJECTED':
+        return AppTheme.error;
+      case 'USED':
+        return AppTheme.info;
+      case 'PENDING':
+      default:
+        return AppTheme.warning;
+    }
+  }
+
   Future<void> _approveTeacher(String teacherId) async {
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-    final success = await gatePassProvider.approveTeacher(teacherId);
-    
+    final gatePassProvider =
+        Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    final success = await gatePassProvider.approveTeacher(
+      teacherId,
+      token: authProvider.token,
+    );
+
     if (success) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Teacher approved successfully'),
+        SnackBar(
+          content: const Text('Teacher approved successfully'),
           backgroundColor: AppTheme.success,
+          behavior: SnackBarBehavior.floating,
         ),
       );
       _loadData();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to approve teacher'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
     }
   }
 
@@ -84,486 +926,94 @@ class _AdminDashboardState extends State<AdminDashboard>
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Confirm Rejection'),
-        content: const Text('Are you sure you want to reject this teacher application? This action cannot be undone.'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Reject Teacher'),
+        content: const Text(
+            'Are you sure you want to reject this teacher application?'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancel'),
           ),
-          TextButton(
+          ElevatedButton(
             onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.error),
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.error),
             child: const Text('Reject'),
           ),
         ],
       ),
     );
-    
-    if (confirmed != true) return;
-    
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-    final success = await gatePassProvider.rejectTeacher(teacherId);
-    
-    if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Teacher application rejected'),
-          backgroundColor: AppTheme.info,
-        ),
+
+    if (confirmed == true) {
+      final gatePassProvider =
+          Provider.of<GatePassProvider>(context, listen: false);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+      final success = await gatePassProvider.rejectTeacher(
+        teacherId,
+        token: authProvider.token,
       );
-      _loadData();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to reject teacher'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
+
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Teacher application rejected'),
+            backgroundColor: AppTheme.error,
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        _loadData();
+      }
     }
-  }
-
-  Future<void> _changeUserRole(String userId, String newRole) async {
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-    final success = await gatePassProvider.changeUserRole(userId, newRole);
-    
-    if (success) {
-      setState(() {
-        _selectedUser = null;
-        _newRole = null;
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('User role updated successfully'),
-          backgroundColor: AppTheme.success,
-        ),
-      );
-      _loadData();
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to update user role'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.backgroundLight,
-      appBar: AppBar(
-        title: const Text('Admin Dashboard'),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          Consumer<AuthProvider>(
-            builder: (context, authProvider, child) {
-              return PopupMenuButton<String>(
-                icon: CircleAvatar(
-                  backgroundColor: AppTheme.primaryYellow,
-                  child: Text(
-                    authProvider.user?.name.substring(0, 1).toUpperCase() ?? 'A',
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                onSelected: (value) {
-                  if (value == 'logout') {
-                    authProvider.logout();
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    enabled: false,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          authProvider.user?.name ?? 'Administrator',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          'Super Admin',
-                          style: TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: 'logout',
-                    child: Row(
-                      children: [
-                        Icon(Icons.logout, color: AppTheme.error),
-                        SizedBox(width: 8),
-                        Text('Logout'),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Welcome Header
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(24),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(24),
-                bottomRight: Radius.circular(24),
-              ),
-            ),
-            child: Consumer<AuthProvider>(
-              builder: (context, authProvider, child) {
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Welcome, ${authProvider.user?.name ?? 'Administrator'}!',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Manage users and system settings',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          
-          // Stats Cards
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    title: 'Total Users',
-                    value: _allUsers.length.toString(),
-                    icon: Icons.people,
-                    color: AppTheme.info,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatCard(
-                    title: 'Students',
-                    value: _allUsers.where((u) => u.isStudent).length.toString(),
-                    icon: Icons.school,
-                    color: AppTheme.success,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatCard(
-                    title: 'Teachers',
-                    value: _allUsers.where((u) => u.isTeacher && u.isApproved).length.toString(),
-                    icon: Icons.person,
-                    color: AppTheme.primaryYellow,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatCard(
-                    title: 'Pending',
-                    value: _pendingTeachers.length.toString(),
-                    icon: Icons.pending,
-                    color: AppTheme.warning,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          // Tab Bar
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: TabBar(
-              controller: _tabController,
-              indicatorColor: AppTheme.primaryYellow,
-              labelColor: AppTheme.primaryYellow,
-              unselectedLabelColor: AppTheme.textSecondary,
-              tabs: [
-                Tab(text: 'Pending Approvals (${_pendingTeachers.length})'),
-                Tab(text: 'All Users (${_allUsers.length})'),
-              ],
-            ),
-          ),
-          
-          // Tab Views
-          Expanded(
-            child: _isLoading 
-                ? const Center(child: CircularProgressIndicator())
-                : TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _PendingApprovalsTab(),
-                      _AllUsersTab(),
-                    ],
-                  ),
-          ),
-        ],
-      ),
-      
-      // Role Change Modal
-      bottomSheet: _selectedUser != null ? _RoleChangeForm() : null,
-    );
-  }
-
-  // Pending Approvals Tab
-  Widget _PendingApprovalsTab() {
-    if (_pendingTeachers.isEmpty) {
-      return const _EmptyState(
-        icon: Icons.check_circle,
-        title: 'No Pending Approvals',
-        subtitle: 'All teacher registrations have been processed.',
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _pendingTeachers.length,
-        itemBuilder: (context, index) {
-          final teacher = _pendingTeachers[index];
-          return _PendingTeacherCard(
-            user: teacher,
-            onApprove: () => _approveTeacher(teacher.id),
-            onReject: () => _rejectTeacher(teacher.id),
-          );
-        },
-      ),
-    );
-  }
-
-  // All Users Tab
-  Widget _AllUsersTab() {
-    if (_allUsers.isEmpty) {
-      return const _EmptyState(
-        icon: Icons.people,
-        title: 'No Users Found',
-        subtitle: 'No users are currently registered in the system.',
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _allUsers.length,
-        itemBuilder: (context, index) {
-          final user = _allUsers[index];
-          return _UserCard(
-            user: user,
-            onRoleChange: () => setState(() => _selectedUser = user),
-          );
-        },
-      ),
-    );
-  }
-
-  // Role Change Form
-  Widget _RoleChangeForm() {
-    return Container(
-      height: MediaQuery.of(context).size.height * 0.4,
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
-        ),
-      ),
-      child: Column(
-        children: [
-          // Handle
-          Container(
-            margin: const EdgeInsets.only(top: 12),
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.grey.shade300,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          
-          // Header
-          Padding(
-            padding: const EdgeInsets.all(24),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    'Change User Role',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                IconButton(
-                  onPressed: () => setState(() => _selectedUser = null),
-                  icon: const Icon(Icons.close),
-                ),
-              ],
-            ),
-          ),
-          
-          // Content
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // User Info
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _selectedUser?.name ?? '',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          _selectedUser?.email ?? '',
-                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          'Current Role: ${_selectedUser?.roleDisplayName ?? ''}',
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: AppTheme.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  
-                  // Role Selection
-                  Text(
-                    'New Role',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade300),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: DropdownButton<String>(
-                      value: _newRole ?? _selectedUser?.role,
-                      hint: const Text('Select new role'),
-                      isExpanded: true,
-                      underline: const SizedBox(),
-                      onChanged: (role) => setState(() => _newRole = role),
-                      items: const [
-                        DropdownMenuItem(value: 'STUDENT', child: Text('Student')),
-                        DropdownMenuItem(value: 'TEACHER', child: Text('Teacher')),
-                        DropdownMenuItem(value: 'SECURITY', child: Text('Security')),
-                        DropdownMenuItem(value: 'SUPER_ADMIN', child: Text('Super Admin')),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  
-                  // Submit Button
-                  CustomButton(
-                    onPressed: _newRole != null && _newRole != _selectedUser?.role
-                        ? () => _changeUserRole(_selectedUser!.id, _newRole!)
-                        : null,
-                    text: 'Update Role',
-                    width: double.infinity,
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 
 // Helper Widgets
-class _StatCard extends StatelessWidget {
+class _StatsCard extends StatelessWidget {
   final String title;
   final String value;
   final IconData icon;
-  final Color color;
+  final Gradient gradient;
 
-  const _StatCard({
+  const _StatsCard({
     required this.title,
     required this.value,
     required this.icon,
-    required this.color,
+    required this.gradient,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        gradient: gradient,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
       child: Column(
         children: [
-          Icon(icon, color: color, size: 20),
-          const SizedBox(height: 4),
+          Icon(icon, color: Colors.white, size: 20),
+          const SizedBox(height: 8),
           Text(
             value,
-            style: Theme.of(context).textTheme.titleLarge?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
           ),
           Text(
             title,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: AppTheme.textSecondary,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 10,
+              fontWeight: FontWeight.w500,
             ),
             textAlign: TextAlign.center,
           ),
@@ -587,42 +1037,38 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, size: 80, color: Colors.grey.shade400),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 64, color: Colors.grey.shade400),
+          const SizedBox(height: 16),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: AppTheme.textSecondary,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppTheme.textSecondary,
+                ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
   }
 }
 
 class _PendingTeacherCard extends StatelessWidget {
-  final User user;
+  final User teacher;
   final VoidCallback onApprove;
   final VoidCallback onReject;
 
   const _PendingTeacherCard({
-    required this.user,
+    required this.teacher,
     required this.onApprove,
     required this.onReject,
   });
@@ -634,11 +1080,12 @@ class _PendingTeacherCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
             blurRadius: 10,
-            spreadRadius: 1,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -651,7 +1098,13 @@ class _PendingTeacherCard extends StatelessWidget {
               children: [
                 CircleAvatar(
                   backgroundColor: AppTheme.warning.withOpacity(0.2),
-                  child: Icon(Icons.person, color: AppTheme.warning),
+                  child: Text(
+                    teacher.name.substring(0, 1).toUpperCase(),
+                    style: TextStyle(
+                      color: AppTheme.warning,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -659,32 +1112,35 @@ class _PendingTeacherCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        user.name,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                        teacher.name,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
                         ),
                       ),
                       Text(
-                        user.email,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        teacher.email,
+                        style: TextStyle(
                           color: AppTheme.textSecondary,
+                          fontSize: 12,
                         ),
                       ),
                     ],
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
                     color: AppTheme.warning.withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    'Pending',
+                    'PENDING',
                     style: TextStyle(
                       color: AppTheme.warning,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
@@ -692,31 +1148,38 @@ class _PendingTeacherCard extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             Text(
-              'Registered: ${DateFormat('MMM dd, yyyy HH:mm').format(user.createdAt)}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              'Applied: ${DateFormat('MMM dd, yyyy').format(teacher.createdAt)}',
+              style: TextStyle(
                 color: AppTheme.textSecondary,
+                fontSize: 12,
               ),
             ),
             const SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
-                  child: CustomButton(
+                  child: OutlinedButton.icon(
                     onPressed: onReject,
-                    text: 'Reject',
-                    backgroundColor: AppTheme.error,
-                    textColor: Colors.white,
-                    icon: Icons.close,
+                    icon: const Icon(Icons.close, size: 16),
+                    label: const Text('Reject'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.error,
+                      side: BorderSide(color: AppTheme.error),
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 12),
                 Expanded(
-                  child: CustomButton(
+                  child: ElevatedButton.icon(
                     onPressed: onApprove,
-                    text: 'Approve',
-                    backgroundColor: AppTheme.success,
-                    textColor: Colors.white,
-                    icon: Icons.check,
+                    icon: const Icon(Icons.check, size: 16),
+                    label: const Text('Approve'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.success,
+                      foregroundColor: Colors.white,
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                    ),
                   ),
                 ),
               ],
@@ -730,37 +1193,11 @@ class _PendingTeacherCard extends StatelessWidget {
 
 class _UserCard extends StatelessWidget {
   final User user;
-  final VoidCallback onRoleChange;
 
-  const _UserCard({
-    required this.user,
-    required this.onRoleChange,
-  });
+  const _UserCard({required this.user});
 
   @override
   Widget build(BuildContext context) {
-    Color roleColor = AppTheme.info;
-    IconData roleIcon = Icons.person;
-    
-    switch (user.role) {
-      case 'SUPER_ADMIN':
-        roleColor = Colors.purple;
-        roleIcon = Icons.admin_panel_settings;
-        break;
-      case 'TEACHER':
-        roleColor = AppTheme.info;
-        roleIcon = Icons.school;
-        break;
-      case 'STUDENT':
-        roleColor = AppTheme.success;
-        roleIcon = Icons.person;
-        break;
-      case 'SECURITY':
-        roleColor = AppTheme.warning;
-        roleIcon = Icons.security;
-        break;
-    }
-
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
@@ -770,7 +1207,137 @@ class _UserCard extends StatelessWidget {
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
             blurRadius: 10,
-            spreadRadius: 1,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            CircleAvatar(
+              backgroundColor: _getRoleColor(user.role).withOpacity(0.2),
+              child: Text(
+                user.name.substring(0, 1).toUpperCase(),
+                style: TextStyle(
+                  color: _getRoleColor(user.role),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    user.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                  Text(
+                    user.email,
+                    style: TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  if (user.rollNo != null && user.rollNo!.isNotEmpty)
+                    Text(
+                      'Roll: ${user.rollNo}',
+                      style: TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _getRoleColor(user.role).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    user.roleDisplayName,
+                    style: TextStyle(
+                      color: _getRoleColor(user.role),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: user.isApproved
+                        ? AppTheme.success.withOpacity(0.1)
+                        : AppTheme.warning.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    user.isApproved ? 'Approved' : 'Pending',
+                    style: TextStyle(
+                      color:
+                          user.isApproved ? AppTheme.success : AppTheme.warning,
+                      fontSize: 9,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getRoleColor(String role) {
+    switch (role) {
+      case 'STUDENT':
+        return AppTheme.info;
+      case 'TEACHER':
+        return AppTheme.success;
+      case 'SECURITY':
+        return AppTheme.warning;
+      case 'SUPER_ADMIN':
+        return AppTheme.error;
+      default:
+        return AppTheme.textSecondary;
+    }
+  }
+}
+
+class _GatePassCard extends StatelessWidget {
+  final GatePass gatePass;
+
+  const _GatePassCard({required this.gatePass});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _getStatusColor(gatePass.status).withOpacity(0.3),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -781,9 +1348,17 @@ class _UserCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                CircleAvatar(
-                  backgroundColor: roleColor.withOpacity(0.2),
-                  child: Icon(roleIcon, color: roleColor),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: _getStatusColor(gatePass.status).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    _getStatusIcon(gatePass.status),
+                    color: _getStatusColor(gatePass.status),
+                    size: 16,
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -791,76 +1366,176 @@ class _UserCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        user.name,
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
+                        '${gatePass.student?.name ?? 'Unknown Student'} → ${gatePass.teacher?.name ?? 'Unknown Teacher'}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14,
                         ),
                       ),
-                      Text(
-                        user.email,
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppTheme.textSecondary,
+                      if (gatePass.student?.rollNo != null)
+                        Text(
+                          'Roll: ${gatePass.student!.rollNo}',
+                          style: TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 11,
+                          ),
                         ),
-                      ),
                     ],
                   ),
                 ),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                   decoration: BoxDecoration(
-                    color: roleColor.withOpacity(0.1),
+                    color: _getStatusColor(gatePass.status).withOpacity(0.1),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    user.roleDisplayName,
+                    gatePass.statusDisplayName.toUpperCase(),
                     style: TextStyle(
-                      color: roleColor,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      color: _getStatusColor(gatePass.status),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
+            Text(
+              gatePass.reason,
+              style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 8),
             Row(
               children: [
-                Expanded(
-                  child: Text(
-                    'Joined: ${DateFormat('MMM dd, yyyy').format(user.createdAt)}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppTheme.textSecondary,
-                    ),
+                Icon(Icons.calendar_today,
+                    size: 14, color: AppTheme.textSecondary),
+                const SizedBox(width: 4),
+                Text(
+                  DateFormat('MMM dd, yyyy HH:mm').format(gatePass.requestDate),
+                  style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 11,
                   ),
                 ),
-                if (!user.isApproved && !user.isStudent)
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: AppTheme.warning.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      'Not Approved',
-                      style: TextStyle(
-                        color: AppTheme.warning,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                const SizedBox(width: 16),
+                Icon(Icons.access_time,
+                    size: 14, color: AppTheme.textSecondary),
+                const SizedBox(width: 4),
+                Text(
+                  'Until ${DateFormat('MMM dd, HH:mm').format(gatePass.validUntil)}',
+                  style: TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 11,
                   ),
+                ),
               ],
             ),
-            const SizedBox(height: 12),
-            CustomButton(
-              onPressed: onRoleChange,
-              text: 'Change Role',
-              isOutlined: true,
-              icon: Icons.edit,
-              width: double.infinity,
-            ),
+            if (gatePass.remarks != null && gatePass.remarks!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.info.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  'Remarks: ${gatePass.remarks}',
+                  style: TextStyle(
+                    color: AppTheme.info,
+                    fontSize: 11,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'APPROVED':
+        return AppTheme.success;
+      case 'REJECTED':
+        return AppTheme.error;
+      case 'USED':
+        return AppTheme.info;
+      case 'PENDING':
+      default:
+        return AppTheme.warning;
+    }
+  }
+
+  IconData _getStatusIcon(String status) {
+    switch (status) {
+      case 'APPROVED':
+        return Icons.check_circle;
+      case 'REJECTED':
+        return Icons.cancel;
+      case 'USED':
+        return Icons.done_all;
+      case 'PENDING':
+      default:
+        return Icons.pending;
+    }
+  }
+}
+
+class _AnalyticsCard extends StatelessWidget {
+  final String title;
+  final String value;
+  final IconData icon;
+  final Color color;
+
+  const _AnalyticsCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+          ),
+          Text(
+            title,
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
   }

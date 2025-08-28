@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:gate_pass_flutter/screens/profile/profile_page.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -26,11 +27,12 @@ class _StudentDashboardState extends State<StudentDashboard>
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
-    
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+      final gatePassProvider =
+          Provider.of<GatePassProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      
+
       authProvider.ensureTokenSet();
       _loadData();
     });
@@ -46,9 +48,10 @@ class _StudentDashboardState extends State<StudentDashboard>
   }
 
   Future<void> _loadData() async {
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+    final gatePassProvider =
+        Provider.of<GatePassProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
+
     await Future.wait([
       gatePassProvider.loadStudentPasses(token: authProvider.token),
       gatePassProvider.loadTeachers(token: authProvider.token),
@@ -74,61 +77,60 @@ class _StudentDashboardState extends State<StudentDashboard>
           Consumer<GatePassProvider>(
             builder: (context, provider, child) {
               return IconButton(
-                onPressed: provider.isLoading ? null : () {
-                  _loadData();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Refreshing data...'),
-                      duration: Duration(seconds: 1),
-                    ),
-                  );
-                },
-                icon: provider.isLoading 
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
+                onPressed: provider.isLoading
+                    ? null
+                    : () {
+                        _loadData();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text('Refreshing data...'),
+                            duration: Duration(seconds: 1),
+                          ),
+                        );
+                      },
+                icon: provider.isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.refresh),
                 tooltip: 'Refresh Data',
               );
             },
           ),
+          // In the AppBar actions, replace the existing PopupMenuButton with:
           Consumer<AuthProvider>(
             builder: (context, authProvider, child) {
               return PopupMenuButton<String>(
                 icon: CircleAvatar(
                   backgroundColor: AppTheme.primaryYellow,
                   child: Text(
-                    authProvider.user?.name.substring(0, 1).toUpperCase() ?? 'S',
+                    authProvider.user?.name.substring(0, 1).toUpperCase() ??
+                        'S',
                     style: const TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
-                    ),
+                        color: Colors.black, fontWeight: FontWeight.bold),
                   ),
                 ),
                 onSelected: (value) {
-                  if (value == 'logout') {
+                  if (value == 'profile') {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                          builder: (context) => const ProfilePage()),
+                    );
+                  } else if (value == 'logout') {
                     authProvider.logout();
                   }
                 },
                 itemBuilder: (context) => [
-                  PopupMenuItem(
-                    enabled: false,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  const PopupMenuItem(
+                    value: 'profile',
+                    child: Row(
                       children: [
-                        Text(
-                          authProvider.user?.name ?? 'Student',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          authProvider.user?.email ?? '',
-                          style: TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 12,
-                          ),
-                        ),
+                        Icon(Icons.person),
+                        SizedBox(width: 8),
+                        Text('Profile'),
                       ],
                     ),
                   ),
@@ -169,23 +171,24 @@ class _StudentDashboardState extends State<StudentDashboard>
                   children: [
                     Text(
                       'Welcome, ${authProvider.user?.name ?? 'Student'}!',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style:
+                          Theme.of(context).textTheme.headlineMedium?.copyWith(
+                                fontWeight: FontWeight.bold,
+                              ),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       'Manage your gate pass requests',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: AppTheme.textSecondary,
-                      ),
+                            color: AppTheme.textSecondary,
+                          ),
                     ),
                   ],
                 );
               },
             ),
           ),
-          
+
           // Stats Cards
           Padding(
             padding: const EdgeInsets.all(16),
@@ -194,7 +197,7 @@ class _StudentDashboardState extends State<StudentDashboard>
                 final passes = gatePassProvider.studentPasses;
                 final pending = passes.where((p) => p.isPending).length;
                 final approved = passes.where((p) => p.isApproved).length;
-                
+
                 return Row(
                   children: [
                     Expanded(
@@ -228,7 +231,7 @@ class _StudentDashboardState extends State<StudentDashboard>
               },
             ),
           ),
-          
+
           // Tab Bar
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -248,7 +251,7 @@ class _StudentDashboardState extends State<StudentDashboard>
               ],
             ),
           ),
-          
+
           // Tab Views
           Expanded(
             child: TabBarView(
@@ -269,15 +272,17 @@ class _StudentDashboardState extends State<StudentDashboard>
         icon: const Icon(Icons.add),
         label: const Text('New Request'),
       ),
-      
+
       // Modals - Fixed navigation issue here
-      bottomSheet: _showRequestForm ? _NewRequestForm(
-        onClose: () {
-          if (mounted) {
-            setState(() => _showRequestForm = false);
-          }
-        },
-      ) : null,
+      bottomSheet: _showRequestForm
+          ? _NewRequestForm(
+              onClose: () {
+                if (mounted) {
+                  setState(() => _showRequestForm = false);
+                }
+              },
+            )
+          : null,
     );
   }
 
@@ -295,8 +300,8 @@ class _StudentDashboardState extends State<StudentDashboard>
               Text(
                 'Your Gate Pass QR Code',
                 style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
+                      fontWeight: FontWeight.bold,
+                    ),
               ),
               const SizedBox(height: 16),
               Container(
@@ -316,8 +321,8 @@ class _StudentDashboardState extends State<StudentDashboard>
               Text(
                 'Show this to security at the gate',
                 style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: AppTheme.textSecondary,
-                ),
+                      color: AppTheme.textSecondary,
+                    ),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -370,15 +375,15 @@ class _StatCard extends StatelessWidget {
           Text(
             value,
             style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
           ),
           Text(
             title,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: AppTheme.textSecondary,
-            ),
+                  color: AppTheme.textSecondary,
+                ),
             textAlign: TextAlign.center,
           ),
         ],
@@ -400,18 +405,20 @@ class _AllPassesTab extends StatelessWidget {
         }
 
         final passes = gatePassProvider.studentPasses;
-        
+
         if (passes.isEmpty) {
           return const _EmptyState(
             icon: Icons.assignment,
             title: 'No Gate Pass Requests',
-            subtitle: 'You haven\'t made any requests yet.\nTap the + button to create your first request.',
+            subtitle:
+                'You haven\'t made any requests yet.\nTap the + button to create your first request.',
           );
         }
 
         return RefreshIndicator(
           onRefresh: () async {
-            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            final authProvider =
+                Provider.of<AuthProvider>(context, listen: false);
             await gatePassProvider.loadStudentPasses(token: authProvider.token);
           },
           child: ListView.builder(
@@ -421,8 +428,9 @@ class _AllPassesTab extends StatelessWidget {
               final pass = passes[index];
               return _GatePassCard(
                 gatePass: pass,
-                onQRTap: pass.qrCode != null 
-                    ? () => (context.findAncestorStateOfType<_StudentDashboardState>())
+                onQRTap: pass.qrCode != null
+                    ? () => (context
+                            .findAncestorStateOfType<_StudentDashboardState>())
                         ?._showQRDialog(pass.qrCode!)
                     : null,
               );
@@ -449,7 +457,7 @@ class _PendingPassesTab extends StatelessWidget {
         final pendingPasses = gatePassProvider.studentPasses
             .where((pass) => pass.isPending)
             .toList();
-        
+
         if (pendingPasses.isEmpty) {
           return const _EmptyState(
             icon: Icons.pending,
@@ -460,7 +468,8 @@ class _PendingPassesTab extends StatelessWidget {
 
         return RefreshIndicator(
           onRefresh: () async {
-            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            final authProvider =
+                Provider.of<AuthProvider>(context, listen: false);
             await gatePassProvider.loadStudentPasses(token: authProvider.token);
           },
           child: ListView.builder(
@@ -492,7 +501,7 @@ class _ApprovedPassesTab extends StatelessWidget {
         final approvedPasses = gatePassProvider.studentPasses
             .where((pass) => pass.isApproved)
             .toList();
-        
+
         if (approvedPasses.isEmpty) {
           return const _EmptyState(
             icon: Icons.check_circle,
@@ -503,7 +512,8 @@ class _ApprovedPassesTab extends StatelessWidget {
 
         return RefreshIndicator(
           onRefresh: () async {
-            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            final authProvider =
+                Provider.of<AuthProvider>(context, listen: false);
             await gatePassProvider.loadStudentPasses(token: authProvider.token);
           },
           child: ListView.builder(
@@ -513,8 +523,9 @@ class _ApprovedPassesTab extends StatelessWidget {
               final pass = approvedPasses[index];
               return _GatePassCard(
                 gatePass: pass,
-                onQRTap: pass.qrCode != null 
-                    ? () => (context.findAncestorStateOfType<_StudentDashboardState>())
+                onQRTap: pass.qrCode != null
+                    ? () => (context
+                            .findAncestorStateOfType<_StudentDashboardState>())
                         ?._showQRDialog(pass.qrCode!)
                     : null,
               );
@@ -556,16 +567,16 @@ class _EmptyState extends StatelessWidget {
             Text(
               title,
               style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
+                    color: AppTheme.textSecondary,
+                  ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
               subtitle,
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
+                    color: AppTheme.textSecondary,
+                  ),
               textAlign: TextAlign.center,
             ),
           ],
@@ -613,26 +624,28 @@ class _GatePassCard extends StatelessWidget {
                   child: Text(
                     gatePass.reason,
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+                          fontWeight: FontWeight.w600,
+                        ),
                   ),
                 ),
                 _StatusBadge(status: gatePass.status),
               ],
             ),
             const SizedBox(height: 12),
-            
+
             // Details
             _DetailRow(
               icon: Icons.calendar_today,
               label: 'Request Date',
-              value: DateFormat('MMM dd, yyyy HH:mm').format(gatePass.requestDate),
+              value:
+                  DateFormat('MMM dd, yyyy HH:mm').format(gatePass.requestDate),
             ),
             const SizedBox(height: 8),
             _DetailRow(
               icon: Icons.access_time,
               label: 'Valid Until',
-              value: DateFormat('MMM dd, yyyy HH:mm').format(gatePass.validUntil),
+              value:
+                  DateFormat('MMM dd, yyyy HH:mm').format(gatePass.validUntil),
             ),
             if (gatePass.teacher != null) ...[
               const SizedBox(height: 8),
@@ -650,7 +663,7 @@ class _GatePassCard extends StatelessWidget {
                 value: gatePass.remarks!,
               ),
             ],
-            
+
             // Actions
             if (gatePass.isApproved && gatePass.qrCode != null) ...[
               const SizedBox(height: 16),
@@ -724,8 +737,11 @@ class _StatusBadge extends StatelessWidget {
           Icon(icon, size: 16, color: textColor),
           const SizedBox(width: 4),
           Text(
-            status.toLowerCase().split('_').map((word) => 
-              word[0].toUpperCase() + word.substring(1)).join(' '),
+            status
+                .toLowerCase()
+                .split('_')
+                .map((word) => word[0].toUpperCase() + word.substring(1))
+                .join(' '),
             style: TextStyle(
               color: textColor,
               fontSize: 12,
@@ -760,16 +776,16 @@ class _DetailRow extends StatelessWidget {
         Text(
           '$label: ',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: AppTheme.textSecondary,
-            fontWeight: FontWeight.w500,
-          ),
+                color: AppTheme.textSecondary,
+                fontWeight: FontWeight.w500,
+              ),
         ),
         Expanded(
           child: Text(
             value,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: AppTheme.textPrimary,
-            ),
+                  color: AppTheme.textPrimary,
+                ),
           ),
         ),
       ],
@@ -780,7 +796,7 @@ class _DetailRow extends StatelessWidget {
 // New Request Form - Fixed navigation issues
 class _NewRequestForm extends StatefulWidget {
   final VoidCallback onClose;
-  
+
   const _NewRequestForm({
     super.key,
     required this.onClose,
@@ -795,7 +811,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
   final _reasonController = TextEditingController();
   final _requestDateController = TextEditingController();
   final _validUntilController = TextEditingController();
-  
+
   Teacher? _selectedTeacher;
   List<Teacher> _teachers = [];
   bool _isLoading = false;
@@ -822,32 +838,33 @@ class _NewRequestFormState extends State<_NewRequestForm> {
       _loadingTeachers = true;
       _errorMessage = null;
     });
-    
+
     try {
-      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+      final gatePassProvider =
+          Provider.of<GatePassProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      
+
       if (authProvider.token == null) {
         throw Exception('No authentication token found');
       }
-      
+
       authProvider.ensureTokenSet();
       await gatePassProvider.loadTeachers(token: authProvider.token);
-      
+
       final teachersList = gatePassProvider.teachers;
-      
+
       setState(() {
         _teachers = List.from(teachersList);
         _loadingTeachers = false;
         _errorMessage = null;
       });
-      
+
       if (_teachers.isEmpty) {
         setState(() {
-          _errorMessage = 'No approved teachers found. Please contact your administrator.';
+          _errorMessage =
+              'No approved teachers found. Please contact your administrator.';
         });
       }
-      
     } catch (e) {
       setState(() {
         _loadingTeachers = false;
@@ -864,13 +881,13 @@ class _NewRequestFormState extends State<_NewRequestForm> {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 30)),
     );
-    
+
     if (date != null) {
       final time = await showTimePicker(
         context: context,
         initialTime: TimeOfDay.now(),
       );
-      
+
       if (time != null) {
         final dateTime = DateTime(
           date.year,
@@ -887,9 +904,9 @@ class _NewRequestFormState extends State<_NewRequestForm> {
   Future<void> _submitRequest() async {
     // Prevent multiple submissions
     if (_isSubmitting) return;
-    
+
     if (!_formKey.currentState!.validate()) return;
-    
+
     if (_selectedTeacher == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -908,13 +925,16 @@ class _NewRequestFormState extends State<_NewRequestForm> {
     try {
       // Small delay to ensure keyboard is hidden
       await Future.delayed(const Duration(milliseconds: 100));
-      
-      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+
+      final gatePassProvider =
+          Provider.of<GatePassProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      
-      final requestDate = DateFormat('MMM dd, yyyy HH:mm').parse(_requestDateController.text);
-      final validUntil = DateFormat('MMM dd, yyyy HH:mm').parse(_validUntilController.text);
-      
+
+      final requestDate =
+          DateFormat('MMM dd, yyyy HH:mm').parse(_requestDateController.text);
+      final validUntil =
+          DateFormat('MMM dd, yyyy HH:mm').parse(_validUntilController.text);
+
       final success = await gatePassProvider.createGatePass(
         reason: _reasonController.text.trim(),
         teacherId: _selectedTeacher!.id,
@@ -926,12 +946,12 @@ class _NewRequestFormState extends State<_NewRequestForm> {
       if (success) {
         // Refresh the data
         await gatePassProvider.loadStudentPasses(token: authProvider.token);
-        
+
         // Close form safely
         if (mounted) {
           await Future.delayed(const Duration(milliseconds: 100));
           widget.onClose();
-          
+
           // Show success message
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -985,7 +1005,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          
+
           // Header
           Padding(
             padding: const EdgeInsets.all(24),
@@ -995,8 +1015,8 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                   child: Text(
                     'New Gate Pass Request',
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                          fontWeight: FontWeight.bold,
+                        ),
                   ),
                 ),
                 IconButton(
@@ -1006,7 +1026,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
               ],
             ),
           ),
-          
+
           // Form
           Expanded(
             child: SingleChildScrollView(
@@ -1023,14 +1043,16 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                         decoration: BoxDecoration(
                           color: AppTheme.error.withOpacity(0.1),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppTheme.error.withOpacity(0.3)),
+                          border: Border.all(
+                              color: AppTheme.error.withOpacity(0.3)),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Row(
                               children: [
-                                Icon(Icons.error, color: AppTheme.error, size: 20),
+                                Icon(Icons.error,
+                                    color: AppTheme.error, size: 20),
                                 const SizedBox(width: 8),
                                 Expanded(
                                   child: Text(
@@ -1057,18 +1079,19 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       ),
                       const SizedBox(height: 20),
                     ],
-                    
+
                     // Teacher Selection
                     Text(
                       'Select Teacher',
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: AppTheme.textPrimary,
-                      ),
+                            fontWeight: FontWeight.w600,
+                            color: AppTheme.textPrimary,
+                          ),
                     ),
                     const SizedBox(height: 8),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 16, vertical: 4),
                       decoration: BoxDecoration(
                         color: Colors.white,
                         border: Border.all(color: Colors.grey.shade300),
@@ -1082,7 +1105,8 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                                   SizedBox(
                                     width: 20,
                                     height: 20,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
                                   ),
                                   SizedBox(width: 12),
                                   Text('Loading teachers...'),
@@ -1094,11 +1118,13 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                                   padding: const EdgeInsets.all(16),
                                   child: Column(
                                     children: [
-                                      Icon(Icons.warning, color: AppTheme.warning, size: 30),
+                                      Icon(Icons.warning,
+                                          color: AppTheme.warning, size: 30),
                                       const SizedBox(height: 8),
                                       const Text(
                                         'No teachers available',
-                                        style: TextStyle(fontWeight: FontWeight.bold),
+                                        style: TextStyle(
+                                            fontWeight: FontWeight.bold),
                                       ),
                                       const Text(
                                         'Please contact your administrator',
@@ -1115,18 +1141,25 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                                 )
                               : DropdownButton<Teacher>(
                                   value: _selectedTeacher,
-                                  hint: Text('Choose your teacher (${_teachers.length} available)'),
+                                  hint: Text(
+                                      'Choose your teacher (${_teachers.length} available)'),
                                   isExpanded: true,
                                   underline: const SizedBox(),
-                                  onChanged: _isSubmitting ? null : (teacher) => setState(() => _selectedTeacher = teacher),
-                                  items: _teachers.map((teacher) => DropdownMenuItem(
-                                    value: teacher,
-                                    child: Text('${teacher.name} (${teacher.email})'),
-                                  )).toList(),
+                                  onChanged: _isSubmitting
+                                      ? null
+                                      : (teacher) => setState(
+                                          () => _selectedTeacher = teacher),
+                                  items: _teachers
+                                      .map((teacher) => DropdownMenuItem(
+                                            value: teacher,
+                                            child: Text(
+                                                '${teacher.name} (${teacher.email})'),
+                                          ))
+                                      .toList(),
                                 ),
                     ),
                     const SizedBox(height: 20),
-                    
+
                     // Reason
                     CustomTextField(
                       controller: _reasonController,
@@ -1142,7 +1175,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       },
                     ),
                     const SizedBox(height: 20),
-                    
+
                     // Request Date
                     CustomTextField(
                       controller: _requestDateController,
@@ -1150,7 +1183,9 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       hintText: 'Select date and time',
                       suffixIcon: Icons.calendar_today,
                       enabled: !_isSubmitting,
-                      onSuffixTap: _isSubmitting ? null : () => _selectDateTime(_requestDateController),
+                      onSuffixTap: _isSubmitting
+                          ? null
+                          : () => _selectDateTime(_requestDateController),
                       validator: (value) {
                         if (value?.isEmpty ?? true) {
                           return 'Please select request date';
@@ -1159,7 +1194,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       },
                     ),
                     const SizedBox(height: 20),
-                    
+
                     // Valid Until
                     CustomTextField(
                       controller: _validUntilController,
@@ -1167,7 +1202,9 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       hintText: 'Select validity date and time',
                       suffixIcon: Icons.calendar_today,
                       enabled: !_isSubmitting,
-                      onSuffixTap: _isSubmitting ? null : () => _selectDateTime(_validUntilController),
+                      onSuffixTap: _isSubmitting
+                          ? null
+                          : () => _selectDateTime(_validUntilController),
                       validator: (value) {
                         if (value?.isEmpty ?? true) {
                           return 'Please select validity date';
@@ -1176,16 +1213,18 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       },
                     ),
                     const SizedBox(height: 32),
-                    
+
                     // Submit Button
                     CustomButton(
-                      onPressed: (_isSubmitting || _loadingTeachers || _teachers.isEmpty) 
-                          ? null 
+                      onPressed: (_isSubmitting ||
+                              _loadingTeachers ||
+                              _teachers.isEmpty)
+                          ? null
                           : _submitRequest,
-                      text: _isSubmitting 
-                          ? 'Submitting...' 
-                          : _loadingTeachers 
-                              ? 'Loading Teachers...' 
+                      text: _isSubmitting
+                          ? 'Submitting...'
+                          : _loadingTeachers
+                              ? 'Loading Teachers...'
                               : 'Submit Request',
                       isLoading: _isSubmitting,
                     ),

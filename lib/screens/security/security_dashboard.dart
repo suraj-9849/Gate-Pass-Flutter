@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:gate_pass_flutter/screens/profile/profile_page.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -8,8 +9,6 @@ import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
 import '../../utils/theme.dart';
-import '../../widgets/custom_button.dart';
-import '../../widgets/custom_text_field.dart';
 
 class SecurityDashboard extends StatefulWidget {
   const SecurityDashboard({super.key});
@@ -21,26 +20,25 @@ class SecurityDashboard extends StatefulWidget {
 class _SecurityDashboardState extends State<SecurityDashboard>
     with TickerProviderStateMixin {
   late TabController _tabController;
+  late AnimationController _pulseController;
   List<GatePass> _activePasses = [];
   List<GatePass> _scannedPasses = [];
   bool _isLoading = false;
   bool _showScanner = false;
-  bool _showManualEntry = false;
-  final TextEditingController _qrController = TextEditingController();
   Timer? _autoRefreshTimer;
-
-  // QR Scanner controller
-  final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _pulseController = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..repeat();
     _loadData();
 
-    // Auto-refresh every 20 seconds for security dashboard
-    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 20), (timer) {
-      if (mounted && !_showScanner && !_showManualEntry) {
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 15), (timer) {
+      if (mounted && !_showScanner) {
         _loadData();
       } else if (!mounted) {
         timer.cancel();
@@ -51,36 +49,30 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   @override
   void dispose() {
     _tabController.dispose();
-    _qrController.dispose();
+    _pulseController.dispose();
     _autoRefreshTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+
+    final gatePassProvider =
+        Provider.of<GatePassProvider>(context, listen: false);
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
+
     try {
-      // These methods return Future<List<GatePass>>, not void
       final futures = await Future.wait([
         gatePassProvider.loadActivePasses(token: authProvider.token),
         gatePassProvider.loadScannedPasses(token: authProvider.token),
       ]);
-      
+
       setState(() {
         _activePasses = futures[0] as List<GatePass>;
         _scannedPasses = futures[1] as List<GatePass>;
       });
     } catch (e) {
       debugPrint('Error loading security data: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error loading data: $e'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
     } finally {
       setState(() => _isLoading = false);
     }
@@ -101,9 +93,16 @@ class _SecurityDashboardState extends State<SecurityDashboard>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Camera Permission Required'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(Icons.camera_alt, color: AppTheme.warning),
+            const SizedBox(width: 8),
+            const Text('Camera Access Required'),
+          ],
+        ),
         content: const Text(
-          'This app needs camera permission to scan QR codes. Please allow camera access to use the QR scanner.',
+          'To scan QR codes, this app needs access to your camera. Please grant permission to continue.',
         ),
         actions: [
           TextButton(
@@ -115,6 +114,10 @@ class _SecurityDashboardState extends State<SecurityDashboard>
               Navigator.pop(context);
               _requestCameraPermission();
             },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.primaryYellow,
+              foregroundColor: Colors.black,
+            ),
             child: const Text('Grant Permission'),
           ),
         ],
@@ -126,7 +129,14 @@ class _SecurityDashboardState extends State<SecurityDashboard>
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Permission Required'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(Icons.settings, color: AppTheme.error),
+            const SizedBox(width: 8),
+            const Text('Permission Required'),
+          ],
+        ),
         content: const Text(
           'Camera permission has been permanently denied. Please enable it from app settings to use QR scanner.',
         ),
@@ -140,6 +150,10 @@ class _SecurityDashboardState extends State<SecurityDashboard>
               Navigator.pop(context);
               openAppSettings();
             },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+              foregroundColor: Colors.white,
+            ),
             child: const Text('Open Settings'),
           ),
         ],
@@ -157,261 +171,225 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   }
 
   Future<void> _processQRCode(String qrCode) async {
-    if (qrCode.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please enter a valid QR code'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
-      return;
-    }
+    if (qrCode.trim().isEmpty) return;
 
-    // Hide scanner/manual entry immediately after scan
-    setState(() {
-      _showScanner = false;
-      _showManualEntry = false;
-    });
+    setState(() => _showScanner = false);
 
-    // Show processing dialog
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const AlertDialog(
-        content: Row(
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(width: 16),
-            Text('Processing QR Code...'),
-          ],
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppTheme.primaryYellow),
+              const SizedBox(width: 16),
+              const Text('Processing QR Code...'),
+            ],
+          ),
         ),
       ),
     );
 
     try {
-      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+      final gatePassProvider =
+          Provider.of<GatePassProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
-      
+
       final success = await gatePassProvider.scanGatePass(
-        qrCode.trim(), 
+        qrCode.trim(),
         token: authProvider.token,
       );
 
-      // Close processing dialog
       Navigator.pop(context);
 
       if (success) {
-        // Reload data to refresh the lists
         await _loadData();
-        
-        // Show detailed success dialog with student exit confirmation
         _showExitConfirmationDialog(qrCode);
-        
-        // Clear manual input
-        _qrController.clear();
       } else {
-        _showScanResultDialog(
-          success: false,
-          title: 'Invalid QR Code',
-          message: 'This QR code is invalid, expired, or has already been used.',
-          icon: Icons.error,
-          iconColor: AppTheme.error,
-        );
+        _showErrorDialog('Invalid QR Code',
+            'This QR code is invalid, expired, or has already been used.');
       }
     } catch (e) {
-      // Close processing dialog if still open
       if (Navigator.canPop(context)) {
         Navigator.pop(context);
       }
-      
-      _showScanResultDialog(
-        success: false,
-        title: 'Error Processing QR Code',
-        message: 'An error occurred while processing the QR code: $e',
-        icon: Icons.warning,
-        iconColor: AppTheme.warning,
-      );
+      _showErrorDialog('Processing Error',
+          'An error occurred while processing the QR code: $e');
     }
   }
 
   void _showExitConfirmationDialog(String qrCode) {
-    // Find the gate pass that was just scanned to get student details
-    final scannedPass = _activePasses.firstWhere(
-      (pass) => pass.qrCode == qrCode,
-      orElse: () => _scannedPasses.isNotEmpty ? _scannedPasses.first : GatePass(
-        id: '',
-        studentId: '',
-        reason: 'Gate pass processed',
-        status: 'USED',
-        requestDate: DateTime.now(),
-        validUntil: DateTime.now(),
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      ),
-    );
-
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // Success icon with animation-like effect
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.success.withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.check_circle,
-                size: 64,
-                color: AppTheme.success,
-              ),
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                AppTheme.success.withOpacity(0.1),
+                Colors.white,
+              ],
             ),
-            const SizedBox(height: 16),
-            Text(
-              'Student Exit Confirmed',
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-                color: AppTheme.success,
+          ),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(20),
+                decoration: BoxDecoration(
+                  color: AppTheme.success,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.success.withOpacity(0.3),
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.check,
+                  size: 40,
+                  color: Colors.white,
+                ),
               ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.info.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
+              const SizedBox(height: 20),
+              Text(
+                'Exit Confirmed',
+                style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.success,
+                    ),
               ),
-              child: Column(
-                children: [
-                  if (scannedPass.student?.name != null) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppTheme.info.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.info.withOpacity(0.2)),
+                ),
+                child: Column(
+                  children: [
                     Text(
-                      'Student: ${scannedPass.student!.name}',
+                      'Student has successfully exited',
                       style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        fontWeight: FontWeight.w600,
-                      ),
+                            fontWeight: FontWeight.w600,
+                          ),
                       textAlign: TextAlign.center,
                     ),
-                    const SizedBox(height: 4),
-                  ],
-                  Text(
-                    'Exit Time: ${DateFormat('MMM dd, yyyy HH:mm').format(DateTime.now())}',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Gate pass has been marked as USED',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppTheme.textSecondary,
-                      fontStyle: FontStyle.italic,
+                    const SizedBox(height: 8),
+                    Text(
+                      DateFormat('MMM dd, yyyy • HH:mm').format(DateTime.now()),
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: AppTheme.textSecondary,
+                          ),
+                      textAlign: TextAlign.center,
                     ),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: AppTheme.warning.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.info, color: AppTheme.warning, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Teacher and student will be notified of the exit',
-                      style: TextStyle(
-                        color: AppTheme.warning,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.warning.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.notifications_active,
+                        color: AppTheme.warning, size: 18),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Teacher and student have been notified',
+                        style: TextStyle(
+                          color: AppTheme.warning,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
                       ),
                     ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        side: BorderSide(color: AppTheme.success),
+                        foregroundColor: AppTheme.success,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('Done'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        Future.delayed(const Duration(milliseconds: 300), () {
+                          if (mounted) _startQRScanner();
+                        });
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.success,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text('Scan Next'),
+                    ),
                   ),
                 ],
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              // Automatically show scanner again for next scan
-              Future.delayed(const Duration(milliseconds: 500), () {
-                if (mounted) {
-                  _startQRScanner();
-                }
-              });
-            },
-            child: const Text('Scan Next'),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.success,
-              foregroundColor: Colors.white,
-            ),
-            child: const Text('Done'),
-          ),
-        ],
       ),
     );
   }
 
-  void _showScanResultDialog({
-    required bool success,
-    required String title,
-    required String message,
-    required IconData icon,
-    required Color iconColor,
-  }) {
+  void _showErrorDialog(String title, String message) {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
           children: [
-            Icon(icon, size: 64, color: iconColor),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              message,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
+            Icon(Icons.error, color: AppTheme.error),
+            const SizedBox(width: 8),
+            Text(title),
           ],
         ),
+        content: Text(message),
         actions: [
-          if (success) ...[
-            TextButton(
-              onPressed: () {
-                Navigator.pop(context);
-                _startQRScanner();
-              },
-              child: const Text('Scan Another'),
-            ),
-          ],
           ElevatedButton(
             onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.error,
+              foregroundColor: Colors.white,
+            ),
             child: const Text('OK'),
           ),
         ],
@@ -421,500 +399,354 @@ class _SecurityDashboardState extends State<SecurityDashboard>
 
   @override
   Widget build(BuildContext context) {
-    // Show QR Scanner fullscreen
     if (_showScanner) {
       return _QRScannerView();
     }
 
-    // Show Manual Entry fullscreen  
-    if (_showManualEntry) {
-      return _ManualEntryView();
-    }
-
-    // Main Dashboard
     return Scaffold(
-      backgroundColor: AppTheme.backgroundLight,
-      appBar: AppBar(
-        title: const Text('Security Dashboard'),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          // Auto-refresh status
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              AppTheme.primaryYellow.withOpacity(0.1),
+              AppTheme.backgroundLight,
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Column(
+            children: [
+              _buildHeader(),
+              _buildQuickStats(),
+              _buildScannerCard(),
+              _buildTabSection(),
+              Expanded(child: _buildTabViews()),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        children: [
           Container(
-            margin: const EdgeInsets.only(right: 8),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 8,
-                  height: 8,
-                  decoration: BoxDecoration(
-                    color: _autoRefreshTimer?.isActive == true 
-                        ? AppTheme.success 
-                        : Colors.grey,
-                    shape: BoxShape.circle,
-                  ),
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  'Live',
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: AppTheme.textSecondary,
-                  ),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppTheme.primaryYellow,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.primaryYellow.withOpacity(0.3),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
                 ),
               ],
             ),
+            child: const Icon(Icons.security, color: Colors.black, size: 24),
           ),
-          // Reload button
-          IconButton(
-            onPressed: _isLoading ? null : () {
-              _loadData();
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Refreshing gate pass data...'),
-                  duration: Duration(seconds: 1),
-                ),
-              );
-            },
-            icon: _isLoading 
-              ? const SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.refresh),
-            tooltip: 'Refresh Data',
-          ),
-          Consumer<AuthProvider>(
-            builder: (context, authProvider, child) {
-              return PopupMenuButton<String>(
-                icon: CircleAvatar(
-                  backgroundColor: AppTheme.primaryYellow,
-                  child: Text(
-                    authProvider.user?.name.substring(0, 1).toUpperCase() ?? 'S',
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                onSelected: (value) {
-                  if (value == 'logout') {
-                    authProvider.logout();
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    enabled: false,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          authProvider.user?.name ?? 'Security',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          authProvider.user?.roleDisplayName ?? 'Security',
-                          style: TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: 'logout',
-                    child: Row(
-                      children: [
-                        Icon(Icons.logout, color: AppTheme.error),
-                        SizedBox(width: 8),
-                        Text('Logout'),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Welcome Header
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(24),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(24),
-                bottomRight: Radius.circular(24),
-              ),
-            ),
+          const SizedBox(width: 16),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'QR Code Scanner',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
+                  'Security Control',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textPrimary,
+                      ),
                 ),
-                const SizedBox(height: 8),
                 Text(
-                  'Scan or enter gate pass QR codes',
-                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: AppTheme.textSecondary,
-                  ),
+                  'Gate Pass Monitoring',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: AppTheme.textSecondary,
+                      ),
                 ),
               ],
             ),
           ),
-
-          // Stats Cards
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _StatCard(
-                    title: 'Today\'s Scans',
-                    value: _scannedPasses.length.toString(),
-                    icon: Icons.check_circle,
-                    color: AppTheme.success,
-                  ),
+          // Refresh button
+          AnimatedBuilder(
+            animation: _pulseController,
+            builder: (context, child) {
+              return Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: _autoRefreshTimer?.isActive == true
+                          ? AppTheme.success
+                              .withOpacity(0.6 * _pulseController.value)
+                          : Colors.transparent,
+                      blurRadius: 20,
+                      spreadRadius: 5,
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _StatCard(
-                    title: 'Active Passes',
-                    value: _activePasses.length.toString(),
-                    icon: Icons.schedule,
-                    color: AppTheme.info,
-                  ),
+                child: IconButton(
+                  onPressed: _isLoading ? null : _loadData,
+                  icon: _isLoading
+                      ? SizedBox(
+                          width: 24,
+                          height: 24,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: AppTheme.primaryYellow,
+                          ),
+                        )
+                      : Icon(
+                          Icons.refresh,
+                          color: AppTheme.textPrimary,
+                          size: 28,
+                        ),
                 ),
-              ],
-            ),
+              );
+            },
           ),
-
-          // Scanner Action Cards
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _ActionCard(
-                    title: 'Camera Scanner',
-                    subtitle: 'Scan QR codes with camera',
-                    icon: Icons.camera_alt,
-                    color: AppTheme.primaryYellow,
-                    onTap: _startQRScanner,
-                  ),
+          const SizedBox(width: 12),
+          // ADD THIS: Profile Button
+          Consumer<AuthProvider>(
+            builder: (context, authProvider, child) {
+              return GestureDetector(
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const ProfilePage()),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _ActionCard(
-                    title: 'Manual Entry',
-                    subtitle: 'Type or paste QR code',
-                    icon: Icons.edit,
-                    color: AppTheme.info,
-                    onTap: () => setState(() => _showManualEntry = true),
-                  ),
-                ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 16),
-
-          // Tab Bar
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: TabBar(
-              controller: _tabController,
-              indicatorColor: AppTheme.primaryYellow,
-              labelColor: AppTheme.primaryYellow,
-              unselectedLabelColor: AppTheme.textSecondary,
-              tabs: const [
-                Tab(text: 'Recent Scans'),
-                Tab(text: 'Active Passes'),
-              ],
-            ),
-          ),
-
-          // Tab Views
-          Expanded(
-            child: _isLoading
-                ? const Center(child: CircularProgressIndicator())
-                : TabBarView(
-                    controller: _tabController,
-                    children: [
-                      _RecentScansTab(),
-                      _ActivePassesTab(),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [AppTheme.info, AppTheme.info.withOpacity(0.8)],
+                    ),
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppTheme.info.withOpacity(0.3),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
                     ],
                   ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircleAvatar(
+                        radius: 14,
+                        backgroundColor: Colors.white,
+                        child: Text(
+                          authProvider.user?.name
+                                  .substring(0, 1)
+                                  .toUpperCase() ??
+                              'S',
+                          style: TextStyle(
+                            color: AppTheme.info,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Icon(Icons.person, color: Colors.white, size: 16),
+                    ],
+                  ),
+                ),
+              );
+            },
           ),
         ],
       ),
     );
   }
 
-  Widget _QRScannerView() {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('QR Scanner'),
-        backgroundColor: Colors.black,
-        iconTheme: const IconThemeData(color: Colors.white),
-        titleTextStyle: const TextStyle(
-          color: Colors.white,
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-        ),
-        leading: IconButton(
-          onPressed: () => setState(() => _showScanner = false),
-          icon: const Icon(Icons.close, color: Colors.white),
-        ),
-        actions: [
-          IconButton(
-            onPressed: () => setState(() => _showManualEntry = true),
-            icon: const Icon(Icons.edit, color: Colors.white),
-            tooltip: 'Manual Entry',
-          ),
-        ],
-      ),
-      backgroundColor: Colors.black,
-      body: Column(
+  Widget _buildQuickStats() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      child: Row(
         children: [
           Expanded(
-            flex: 4,
-            child: Container(
-              width: double.infinity,
-              child: Stack(
-                alignment: Alignment.center,
-                children: [
-                  // Actual QR Scanner Widget
-                  MobileScanner(
-                    onDetect: (capture) {
-                      final List<Barcode> barcodes = capture.barcodes;
-                      for (final barcode in barcodes) {
-                        if (barcode.rawValue != null && barcode.rawValue!.isNotEmpty) {
-                          // Process the first valid QR code found
-                          _processQRCode(barcode.rawValue!);
-                          break;
-                        }
-                      }
-                    },
-                  ),
-                  
-                  // Scanner overlay frame
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(
-                        color: AppTheme.primaryYellow,
-                        width: 3,
-                      ),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    width: 250,
-                    height: 250,
-                  ),
-                ],
+            child: _StatsCard(
+              title: 'Active Passes',
+              value: _activePasses.length.toString(),
+              icon: Icons.access_time,
+              color: AppTheme.info,
+              gradient: LinearGradient(
+                colors: [AppTheme.info, AppTheme.info.withOpacity(0.7)],
               ),
             ),
           ),
-          
+          const SizedBox(width: 16),
           Expanded(
-            flex: 1,
-            child: Container(
-              color: Colors.black,
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                children: [
-                  Text(
-                    'Position the QR code within the frame',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                    ),
-                    textAlign: TextAlign.center,
+            child: _StatsCard(
+              title: 'Scanned Today',
+              value: _scannedPasses.length.toString(),
+              icon: Icons.qr_code_scanner,
+              color: AppTheme.success,
+              gradient: LinearGradient(
+                colors: [AppTheme.success, AppTheme.success.withOpacity(0.7)],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScannerCard() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppTheme.primaryYellow,
+            AppTheme.primaryYellow.withOpacity(0.8),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: AppTheme.primaryYellow.withOpacity(0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _startQRScanner,
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
                   ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  child: const Icon(
+                    Icons.qr_code_scanner,
+                    size: 32,
+                    color: Colors.black87,
+                  ),
+                ),
+                const SizedBox(width: 20),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      ElevatedButton.icon(
-                        onPressed: () => setState(() => _showManualEntry = true),
-                        icon: const Icon(Icons.edit),
-                        label: const Text('Manual Entry'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.info,
-                          foregroundColor: Colors.white,
+                      const Text(
+                        'Start QR Scanner',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.black87,
                         ),
                       ),
-                      ElevatedButton.icon(
-                        onPressed: () => setState(() => _showScanner = false),
-                        icon: const Icon(Icons.close),
-                        label: const Text('Close'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.grey.shade600,
-                          foregroundColor: Colors.white,
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Tap to scan student gate passes',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.black54,
                         ),
                       ),
                     ],
                   ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _ManualEntryView() {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Manual QR Entry'),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        leading: IconButton(
-          onPressed: () => setState(() => _showManualEntry = false),
-          icon: const Icon(Icons.arrow_back),
-        ),
-        actions: [
-          IconButton(
-            onPressed: () => setState(() => _showScanner = true),
-            icon: const Icon(Icons.camera_alt),
-            tooltip: 'Camera Scanner',
-          ),
-        ],
-      ),
-      backgroundColor: AppTheme.backgroundLight,
-      body: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.qr_code,
-              size: 80,
-              color: AppTheme.info,
-            ),
-            const SizedBox(height: 24),
-            Text(
-              'Enter QR Code',
-              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Type or paste the gate pass QR code below',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 32),
-            
-            CustomTextField(
-              controller: _qrController,
-              label: 'QR Code',
-              hintText: 'Enter or paste QR code here (e.g., GP-xyz123-1234567890)',
-              maxLines: 3,
-            ),
-            const SizedBox(height: 24),
-            
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () => setState(() => _showManualEntry = false),
-                    icon: const Icon(Icons.cancel),
-                    label: const Text('Cancel'),
-                  ),
                 ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: CustomButton(
-                    onPressed: () => _processQRCode(_qrController.text),
-                    text: 'Process QR Code',
-                    icon: Icons.send,
-                  ),
+                const Icon(
+                  Icons.arrow_forward_ios,
+                  color: Colors.black54,
+                  size: 20,
                 ),
               ],
             ),
-            
-            const SizedBox(height: 24),
-            
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: AppTheme.info.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.info, color: AppTheme.info),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'QR codes typically start with "GP-" followed by a unique identifier.',
-                      style: TextStyle(color: AppTheme.info),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _RecentScansTab() {
-    if (_scannedPasses.isEmpty) {
-      return _EmptyState(
-        icon: Icons.history,
-        title: 'No Recent Scans',
-        subtitle: 'Processed gate passes will appear here.',
-      );
-    }
-
-    return RefreshIndicator(
-      onRefresh: _loadData,
-      child: ListView.builder(
-        padding: const EdgeInsets.all(16),
-        itemCount: _scannedPasses.length,
-        itemBuilder: (context, index) {
-          final pass = _scannedPasses[index];
-          return _ScannedPassCard(gatePass: pass);
-        },
+  Widget _buildTabSection() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: TabBar(
+        controller: _tabController,
+        labelColor: Colors.black,
+        unselectedLabelColor: AppTheme.textSecondary,
+        labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+        tabs: [
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.schedule, size: 18),
+                const SizedBox(width: 8),
+                Text('Active (${_activePasses.length})'),
+              ],
+            ),
+          ),
+          Tab(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.history, size: 18),
+                const SizedBox(width: 8),
+                Text('Scanned (${_scannedPasses.length})'),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _ActivePassesTab() {
+  Widget _buildTabViews() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+      child: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildActiveTab(),
+          _buildScannedTab(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActiveTab() {
     if (_activePasses.isEmpty) {
       return _EmptyState(
         icon: Icons.schedule,
         title: 'No Active Passes',
-        subtitle: 'Currently valid gate passes will appear here.',
+        subtitle: 'Currently valid gate passes will appear here',
       );
     }
 
     return RefreshIndicator(
       onRefresh: _loadData,
+      color: AppTheme.primaryYellow,
       child: ListView.builder(
-        padding: const EdgeInsets.all(16),
         itemCount: _activePasses.length,
         itemBuilder: (context, index) {
           final pass = _activePasses[index];
@@ -926,54 +758,104 @@ class _SecurityDashboardState extends State<SecurityDashboard>
       ),
     );
   }
-}
 
-// Helper Widgets
-class _StatCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
+  Widget _buildScannedTab() {
+    if (_scannedPasses.isEmpty) {
+      return _EmptyState(
+        icon: Icons.history,
+        title: 'No Scanned Passes',
+        subtitle: 'Processed gate passes will appear here',
+      );
+    }
 
-  const _StatCard({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
-          ),
-        ],
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: AppTheme.primaryYellow,
+      child: ListView.builder(
+        itemCount: _scannedPasses.length,
+        itemBuilder: (context, index) {
+          return _ScannedPassCard(gatePass: _scannedPasses[index]);
+        },
       ),
-      child: Column(
+    );
+  }
+
+  Widget _QRScannerView() {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(
         children: [
-          Icon(icon, color: color, size: 24),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
+          MobileScanner(
+            onDetect: (capture) {
+              final List<Barcode> barcodes = capture.barcodes;
+              for (final barcode in barcodes) {
+                if (barcode.rawValue != null && barcode.rawValue!.isNotEmpty) {
+                  _processQRCode(barcode.rawValue!);
+                  break;
+                }
+              }
+            },
+          ),
+
+          // Overlay
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.5),
+            ),
+            child: Center(
+              child: Container(
+                width: 250,
+                height: 250,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: AppTheme.primaryYellow,
+                    width: 3,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+              ),
             ),
           ),
-          Text(
-            title,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: AppTheme.textSecondary,
+
+          // Close button
+          SafeArea(
+            child: Positioned(
+              top: 20,
+              right: 20,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  shape: BoxShape.circle,
+                ),
+                child: IconButton(
+                  onPressed: () => setState(() => _showScanner = false),
+                  icon: const Icon(Icons.close, color: Colors.white, size: 30),
+                ),
+              ),
             ),
-            textAlign: TextAlign.center,
+          ),
+
+          // Instructions
+          Positioned(
+            bottom: 100,
+            left: 20,
+            right: 20,
+            child: Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.8),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              child: const Text(
+                'Position the QR code within the frame\nScanning will happen automatically',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
           ),
         ],
       ),
@@ -981,75 +863,58 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-class _ActionCard extends StatelessWidget {
+// Helper Widgets
+class _StatsCard extends StatelessWidget {
   final String title;
-  final String subtitle;
+  final String value;
   final IconData icon;
   final Color color;
-  final VoidCallback onTap;
+  final Gradient gradient;
 
-  const _ActionCard({
+  const _StatsCard({
     required this.title,
-    required this.subtitle,
+    required this.value,
     required this.icon,
     required this.color,
-    required this.onTap,
+    required this.gradient,
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [color, color.withOpacity(0.8)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        gradient: gradient,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
             color: color.withOpacity(0.3),
-            blurRadius: 15,
-            spreadRadius: 2,
+            blurRadius: 10,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              children: [
-                Icon(
-                  icon,
-                  size: 48,
+      child: Column(
+        children: [
+          Icon(icon, color: Colors.white, size: 24),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
                   color: Colors.white,
                 ),
-                const SizedBox(height: 12),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: Colors.white.withOpacity(0.9),
-                    fontSize: 12,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-              ],
-            ),
           ),
-        ),
+          Text(
+            title,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
       ),
     );
   }
@@ -1069,120 +934,38 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
               icon,
-              size: 80,
+              size: 64,
               color: Colors.grey.shade400,
             ),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _ScannedPassCard extends StatelessWidget {
-  final GatePass gatePass;
-
-  const _ScannedPassCard({required this.gatePass});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
+          ),
+          const SizedBox(height: 20),
+          Text(
+            title,
+            style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w600,
+                ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: AppTheme.textSecondary,
+                ),
+            textAlign: TextAlign.center,
           ),
         ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: AppTheme.success.withOpacity(0.2),
-                  child: Icon(
-                    Icons.check_circle,
-                    color: AppTheme.success,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        gatePass.student?.name ?? 'Unknown Student',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Text(
-                        'Scanned at ${DateFormat('MMM dd, yyyy HH:mm').format(gatePass.usedAt ?? gatePass.updatedAt)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppTheme.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppTheme.success.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'USED',
-                    style: TextStyle(
-                      color: AppTheme.success,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              gatePass.reason,
-              style: Theme.of(context).textTheme.bodyMedium,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1200,20 +983,30 @@ class _ActivePassCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isExpired = gatePass.validUntil.isBefore(DateTime.now());
-    
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
+      margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white,
+            isExpired ? Colors.red.shade50 : Colors.white,
+          ],
+        ),
         borderRadius: BorderRadius.circular(16),
-        border: isExpired 
-            ? Border.all(color: AppTheme.error.withOpacity(0.3))
-            : null,
+        border: Border.all(
+          color: isExpired
+              ? AppTheme.error.withOpacity(0.3)
+              : AppTheme.success.withOpacity(0.3),
+          width: 1,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
             blurRadius: 10,
-            spreadRadius: 1,
+            offset: const Offset(0, 2),
           ),
         ],
       ),
@@ -1224,10 +1017,14 @@ class _ActivePassCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                CircleAvatar(
-                  backgroundColor: isExpired 
-                      ? AppTheme.error.withOpacity(0.2)
-                      : AppTheme.success.withOpacity(0.2),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: isExpired
+                        ? AppTheme.error.withOpacity(0.1)
+                        : AppTheme.success.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
                   child: Icon(
                     isExpired ? Icons.timer_off : Icons.access_time,
                     color: isExpired ? AppTheme.error : AppTheme.success,
@@ -1241,28 +1038,60 @@ class _ActivePassCard extends StatelessWidget {
                     children: [
                       Text(
                         gatePass.student?.name ?? 'Unknown Student',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
+                        style:
+                            Theme.of(context).textTheme.titleMedium?.copyWith(
+                                  fontWeight: FontWeight.bold,
+                                ),
                       ),
                       Text(
-                        'Valid until ${DateFormat('MMM dd, yyyy HH:mm').format(gatePass.validUntil)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: isExpired ? AppTheme.error : AppTheme.textSecondary,
+                        'Valid until ${DateFormat('MMM dd, HH:mm').format(gatePass.validUntil)}',
+                        style: TextStyle(
+                          color: isExpired
+                              ? AppTheme.error
+                              : AppTheme.textSecondary,
+                          fontSize: 12,
                         ),
                       ),
                     ],
                   ),
                 ),
                 if (!isExpired)
-                  ElevatedButton.icon(
-                    onPressed: onProcess,
-                    icon: const Icon(Icons.qr_code_scanner, size: 16),
-                    label: const Text('Process'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: AppTheme.primaryYellow,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  Container(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          AppTheme.primaryYellow,
+                          AppTheme.primaryYellow.withOpacity(0.8)
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: onProcess,
+                        borderRadius: BorderRadius.circular(20),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 8),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.qr_code_scanner,
+                                  size: 16, color: Colors.black),
+                              const SizedBox(width: 4),
+                              const Text(
+                                'Process',
+                                style: TextStyle(
+                                  color: Colors.black,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ),
                   ),
               ],
@@ -1280,7 +1109,7 @@ class _ActivePassCard extends StatelessWidget {
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
                   color: AppTheme.error.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
+                  borderRadius: BorderRadius.circular(6),
                 ),
                 child: Row(
                   children: [
@@ -1294,6 +1123,101 @@ class _ActivePassCard extends StatelessWidget {
                 ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ScannedPassCard extends StatelessWidget {
+  final GatePass gatePass;
+
+  const _ScannedPassCard({required this.gatePass});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.white, Colors.white],
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.success.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.success,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(
+                Icons.check,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    gatePass.student?.name ?? 'Unknown Student',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    gatePass.reason,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Scanned: ${DateFormat('MMM dd, HH:mm').format(gatePass.usedAt ?? gatePass.updatedAt)}',
+                    style: TextStyle(
+                      color: AppTheme.success,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppTheme.success.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'COMPLETED',
+                style: TextStyle(
+                  color: AppTheme.success,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
           ],
         ),
       ),
