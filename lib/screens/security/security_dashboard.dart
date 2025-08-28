@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
@@ -21,8 +23,13 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   List<GatePass> _activePasses = [];
   List<GatePass> _scannedPasses = [];
   bool _isLoading = false;
+  bool _showScanner = false;
   bool _showManualEntry = false;
   final TextEditingController _qrController = TextEditingController();
+
+  // QR Scanner controller
+  // QRViewController? _qrController; // Uncomment when using qr_code_scanner
+  final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
 
   @override
   void initState() {
@@ -42,11 +49,13 @@ class _SecurityDashboardState extends State<SecurityDashboard>
     setState(() => _isLoading = true);
     
     final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
     
     try {
+      // These methods return Future<List<GatePass>>, not void
       final futures = await Future.wait([
-        gatePassProvider.loadActivePasses(),
-        gatePassProvider.loadScannedPasses(),
+        gatePassProvider.loadActivePasses(token: authProvider.token),
+        gatePassProvider.loadScannedPasses(token: authProvider.token),
       ]);
       
       setState(() {
@@ -55,39 +64,233 @@ class _SecurityDashboardState extends State<SecurityDashboard>
       });
     } catch (e) {
       debugPrint('Error loading security data: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error loading data: $e'),
+          backgroundColor: AppTheme.error,
+        ),
+      );
     } finally {
       setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _processQRCode(String qrCode) async {
-    if (qrCode.trim().isEmpty) return;
-    
-    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-    final success = await gatePassProvider.scanGatePass(qrCode.trim());
-    
-    if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Gate pass processed successfully'),
-          backgroundColor: AppTheme.success,
+  Future<void> _requestCameraPermission() async {
+    final status = await Permission.camera.request();
+    if (status.isGranted) {
+      setState(() => _showScanner = true);
+    } else if (status.isDenied) {
+      _showPermissionDialog();
+    } else if (status.isPermanentlyDenied) {
+      _showSettingsDialog();
+    }
+  }
+
+  void _showPermissionDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Camera Permission Required'),
+        content: const Text(
+          'This app needs camera permission to scan QR codes. Please allow camera access to use the QR scanner.',
         ),
-      );
-      _qrController.clear();
-      setState(() => _showManualEntry = false);
-      await _loadData();
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _requestCameraPermission();
+            },
+            child: const Text('Grant Permission'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showSettingsDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Permission Required'),
+        content: const Text(
+          'Camera permission has been permanently denied. Please enable it from app settings to use QR scanner.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              openAppSettings();
+            },
+            child: const Text('Open Settings'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _startQRScanner() async {
+    final status = await Permission.camera.status;
+    if (status.isGranted) {
+      setState(() => _showScanner = true);
     } else {
+      _requestCameraPermission();
+    }
+  }
+
+  Future<void> _processQRCode(String qrCode) async {
+    if (qrCode.trim().isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Invalid or expired gate pass'),
+          content: Text('Please enter a valid QR code'),
           backgroundColor: AppTheme.error,
         ),
+      );
+      return;
+    }
+
+    // Hide scanner/manual entry
+    setState(() {
+      _showScanner = false;
+      _showManualEntry = false;
+    });
+
+    // Show processing dialog
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const AlertDialog(
+        content: Row(
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(width: 16),
+            Text('Processing QR Code...'),
+          ],
+        ),
+      ),
+    );
+
+    try {
+      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      
+      final success = await gatePassProvider.scanGatePass(
+        qrCode.trim(), 
+        token: authProvider.token,
+      );
+
+      // Close processing dialog
+      Navigator.pop(context);
+
+      if (success) {
+        // Reload data
+        await _loadData();
+        
+        // Show success dialog
+        _showScanResultDialog(
+          success: true,
+          title: 'QR Code Scanned Successfully',
+          message: 'Gate pass has been processed and marked as used.',
+          icon: Icons.check_circle,
+          iconColor: AppTheme.success,
+        );
+        
+        // Clear manual input
+        _qrController.clear();
+      } else {
+        _showScanResultDialog(
+          success: false,
+          title: 'Invalid QR Code',
+          message: 'This QR code is invalid, expired, or has already been used.',
+          icon: Icons.error,
+          iconColor: AppTheme.error,
+        );
+      }
+    } catch (e) {
+      // Close processing dialog
+      Navigator.pop(context);
+      
+      _showScanResultDialog(
+        success: false,
+        title: 'Error Processing QR Code',
+        message: 'An error occurred while processing the QR code: $e',
+        icon: Icons.warning,
+        iconColor: AppTheme.warning,
       );
     }
   }
 
+  void _showScanResultDialog({
+    required bool success,
+    required String title,
+    required String message,
+    required IconData icon,
+    required Color iconColor,
+  }) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 64, color: iconColor),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppTheme.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+        actions: [
+          if (success) ...[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                _startQRScanner();
+              },
+              child: const Text('Scan Another'),
+            ),
+          ],
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Show QR Scanner fullscreen
+    if (_showScanner) {
+      return _QRScannerView();
+    }
+
+    // Show Manual Entry fullscreen  
+    if (_showManualEntry) {
+      return _ManualEntryView();
+    }
+
+    // Main Dashboard
     return Scaffold(
       backgroundColor: AppTheme.backgroundLight,
       appBar: AppBar(
@@ -124,7 +327,7 @@ class _SecurityDashboardState extends State<SecurityDashboard>
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
                         Text(
-                          'Security Officer',
+                          authProvider.user?.roleDisplayName ?? 'Security',
                           style: TextStyle(
                             color: AppTheme.textSecondary,
                             fontSize: 12,
@@ -150,245 +353,345 @@ class _SecurityDashboardState extends State<SecurityDashboard>
           ),
         ],
       ),
-      body: _showManualEntry ? _ManualEntryView() : _MainDashboardView(),
-      floatingActionButton: _showManualEntry 
-          ? null 
-          : FloatingActionButton.extended(
-              onPressed: () => setState(() => _showManualEntry = true),
-              backgroundColor: AppTheme.primaryYellow,
-              foregroundColor: Colors.black,
-              icon: const Icon(Icons.edit),
-              label: const Text('Manual Entry'),
-            ),
-    );
-  }
-
-  Widget _MainDashboardView() {
-    return Column(
-      children: [
-        // Welcome Header
-        Container(
-          width: double.infinity,
-          padding: const EdgeInsets.all(24),
-          decoration: const BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.only(
-              bottomLeft: Radius.circular(24),
-              bottomRight: Radius.circular(24),
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Security Dashboard',
-                style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Validate gate passes manually',
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: AppTheme.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        // Stats Cards
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Expanded(
-                child: _StatCard(
-                  title: 'Today\'s Scans',
-                  value: _scannedPasses.length.toString(),
-                  icon: Icons.check_circle,
-                  color: AppTheme.success,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _StatCard(
-                  title: 'Active Passes',
-                  value: _activePasses.length.toString(),
-                  icon: Icons.schedule,
-                  color: AppTheme.info,
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        // Manual Entry Card
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [AppTheme.primaryYellow, AppTheme.primaryYellow.withOpacity(0.8)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: AppTheme.primaryYellow.withOpacity(0.3),
-                blurRadius: 15,
-                spreadRadius: 2,
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              Icon(
-                Icons.edit,
-                size: 48,
-                color: Colors.black,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Manual QR Entry',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.black,
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Enter gate pass QR code manually to validate',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: Colors.black.withOpacity(0.7),
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              CustomButton(
-                onPressed: () => setState(() => _showManualEntry = true),
-                text: 'Start Entry',
-                backgroundColor: Colors.black,
-                textColor: AppTheme.primaryYellow,
-                width: double.infinity,
-              ),
-            ],
-          ),
-        ),
-        
-        const SizedBox(height: 16),
-        
-        // Tab Bar and Views (same as before)
-        Container(
-          margin: const EdgeInsets.symmetric(horizontal: 16),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: TabBar(
-            controller: _tabController,
-            indicatorColor: AppTheme.primaryYellow,
-            labelColor: AppTheme.primaryYellow,
-            unselectedLabelColor: AppTheme.textSecondary,
-            tabs: const [
-              Tab(text: 'Recent Scans'),
-              Tab(text: 'Active Passes'),
-            ],
-          ),
-        ),
-        
-        Expanded(
-          child: _isLoading 
-              ? const Center(child: CircularProgressIndicator())
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _RecentScansTab(),
-                    _ActivePassesTab(),
-                  ],
-                ),
-        ),
-      ],
-    );
-  }
-
-  Widget _ManualEntryView() {
-    return Column(
-      children: [
-        // Header
-        Container(
-          padding: const EdgeInsets.all(16),
-          color: Colors.white,
-          child: Row(
-            children: [
-              IconButton(
-                onPressed: () => setState(() => _showManualEntry = false),
-                icon: const Icon(Icons.arrow_back),
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Manual QR Entry',
-                style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-        ),
-        
-        // Manual Entry Form
-        Expanded(
-          child: Padding(
+      body: Column(
+        children: [
+          // Welcome Header
+          Container(
+            width: double.infinity,
             padding: const EdgeInsets.all(24),
+            decoration: const BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(24),
+                bottomRight: Radius.circular(24),
+              ),
+            ),
             child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  Icons.qr_code,
-                  size: 80,
-                  color: AppTheme.primaryYellow,
-                ),
-                const SizedBox(height: 24),
                 Text(
-                  'Enter QR Code',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                  'QR Code Scanner',
+                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
                     fontWeight: FontWeight.bold,
                   ),
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  'Type or paste the gate pass QR code',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  'Scan or enter gate pass QR codes',
+                  style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                     color: AppTheme.textSecondary,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 32),
-                
-                CustomTextField(
-                  controller: _qrController,
-                  label: 'QR Code',
-                  hintText: 'Enter or paste QR code here',
-                  maxLines: 3,
-                ),
-                const SizedBox(height: 24),
-                
-                CustomButton(
-                  onPressed: () => _processQRCode(_qrController.text),
-                  text: 'Process Gate Pass',
-                  width: double.infinity,
-                  icon: Icons.send,
                 ),
               ],
             ),
           ),
-        ),
-      ],
+
+          // Stats Cards
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _StatCard(
+                    title: 'Today\'s Scans',
+                    value: _scannedPasses.length.toString(),
+                    icon: Icons.check_circle,
+                    color: AppTheme.success,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _StatCard(
+                    title: 'Active Passes',
+                    value: _activePasses.length.toString(),
+                    icon: Icons.schedule,
+                    color: AppTheme.info,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Scanner Action Cards
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _ActionCard(
+                    title: 'Camera Scanner',
+                    subtitle: 'Scan QR codes with camera',
+                    icon: Icons.camera_alt,
+                    color: AppTheme.primaryYellow,
+                    onTap: _startQRScanner,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _ActionCard(
+                    title: 'Manual Entry',
+                    subtitle: 'Type or paste QR code',
+                    icon: Icons.edit,
+                    color: AppTheme.info,
+                    onTap: () => setState(() => _showManualEntry = true),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // Tab Bar
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: TabBar(
+              controller: _tabController,
+              indicatorColor: AppTheme.primaryYellow,
+              labelColor: AppTheme.primaryYellow,
+              unselectedLabelColor: AppTheme.textSecondary,
+              tabs: const [
+                Tab(text: 'Recent Scans'),
+                Tab(text: 'Active Passes'),
+              ],
+            ),
+          ),
+
+          // Tab Views
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _RecentScansTab(),
+                      _ActivePassesTab(),
+                    ],
+                  ),
+          ),
+        ],
+      ),
     );
   }
 
-  // Same helper widgets as before...
+  Widget _QRScannerView() {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('QR Scanner'),
+        backgroundColor: Colors.black,
+        iconTheme: const IconThemeData(color: Colors.white),
+        titleTextStyle: const TextStyle(
+          color: Colors.white,
+          fontSize: 20,
+          fontWeight: FontWeight.bold,
+        ),
+        leading: IconButton(
+          onPressed: () => setState(() => _showScanner = false),
+          icon: const Icon(Icons.close, color: Colors.white),
+        ),
+        actions: [
+          IconButton(
+            onPressed: () => setState(() => _showManualEntry = true),
+            icon: const Icon(Icons.edit, color: Colors.white),
+            tooltip: 'Manual Entry',
+          ),
+        ],
+      ),
+      backgroundColor: Colors.black,
+      body: Column(
+        children: [
+          Expanded(
+            flex: 4,
+            child: Container(
+              width: double.infinity,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  // Actual QR Scanner Widget
+                  MobileScanner(
+                    onDetect: (capture) {
+                      final List<Barcode> barcodes = capture.barcodes;
+                      for (final barcode in barcodes) {
+                        if (barcode.rawValue != null && barcode.rawValue!.isNotEmpty) {
+                          // Process the first valid QR code found
+                          _processQRCode(barcode.rawValue!);
+                          break;
+                        }
+                      }
+                    },
+                  ),
+                  
+                  // Scanner overlay frame
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: AppTheme.primaryYellow,
+                        width: 3,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    width: 250,
+                    height: 250,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          
+          Expanded(
+            flex: 1,
+            child: Container(
+              color: Colors.black,
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                children: [
+                  Text(
+                    'Position the QR code within the frame',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w500,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () => setState(() => _showManualEntry = true),
+                        icon: const Icon(Icons.edit),
+                        label: const Text('Manual Entry'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.info,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: () => setState(() => _showScanner = false),
+                        icon: const Icon(Icons.close),
+                        label: const Text('Close'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.grey.shade600,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _ManualEntryView() {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Manual QR Entry'),
+        backgroundColor: Colors.white,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => setState(() => _showManualEntry = false),
+          icon: const Icon(Icons.arrow_back),
+        ),
+        actions: [
+          IconButton(
+            onPressed: () => setState(() => _showScanner = true),
+            icon: const Icon(Icons.camera_alt),
+            tooltip: 'Camera Scanner',
+          ),
+        ],
+      ),
+      backgroundColor: AppTheme.backgroundLight,
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.qr_code,
+              size: 80,
+              color: AppTheme.info,
+            ),
+            const SizedBox(height: 24),
+            Text(
+              'Enter QR Code',
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Type or paste the gate pass QR code below',
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppTheme.textSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            
+            CustomTextField(
+              controller: _qrController,
+              label: 'QR Code',
+              hintText: 'Enter or paste QR code here (e.g., GP-xyz123-1234567890)',
+              maxLines: 3,
+            ),
+            const SizedBox(height: 24),
+            
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () => setState(() => _showManualEntry = false),
+                    icon: const Icon(Icons.cancel),
+                    label: const Text('Cancel'),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: CustomButton(
+                    onPressed: () => _processQRCode(_qrController.text),
+                    text: 'Process QR Code',
+                    icon: Icons.send,
+                  ),
+                ),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppTheme.info.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, color: AppTheme.info),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'QR codes typically start with "GP-" followed by a unique identifier.',
+                      style: TextStyle(color: AppTheme.info),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _RecentScansTab() {
     if (_scannedPasses.isEmpty) {
       return _EmptyState(
@@ -437,7 +740,7 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   }
 }
 
-// Helper Widgets...
+// Helper Widgets
 class _StatCard extends StatelessWidget {
   final String title;
   final String value;
@@ -490,6 +793,80 @@ class _StatCard extends StatelessWidget {
   }
 }
 
+class _ActionCard extends StatelessWidget {
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _ActionCard({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [color, color.withOpacity(0.8)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: color.withOpacity(0.3),
+            blurRadius: 15,
+            spreadRadius: 2,
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              children: [
+                Icon(
+                  icon,
+                  size: 48,
+                  color: Colors.white,
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.9),
+                    fontSize: 12,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _EmptyState extends StatelessWidget {
   final IconData icon;
   final String title;
@@ -509,7 +886,11 @@ class _EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 80, color: Colors.grey.shade400),
+            Icon(
+              icon,
+              size: 80,
+              color: Colors.grey.shade400,
+            ),
             const SizedBox(height: 16),
             Text(
               title,
@@ -555,52 +936,62 @@ class _ScannedPassCard extends StatelessWidget {
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            CircleAvatar(
-              backgroundColor: AppTheme.success.withOpacity(0.2),
-              child: Icon(Icons.check, color: AppTheme.success),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    gatePass.student?.name ?? 'Student',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: AppTheme.success.withOpacity(0.2),
+                  child: Icon(
+                    Icons.check_circle,
+                    color: AppTheme.success,
+                    size: 20,
                   ),
-                  Text(
-                    gatePass.reason,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                  Text(
-                    'Processed: ${gatePass.usedAt != null ? DateFormat('MMM dd, HH:mm').format(gatePass.usedAt!) : 'Recently'}',
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppTheme.success.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                'Processed',
-                style: TextStyle(
-                  color: AppTheme.success,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
                 ),
-              ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        gatePass.student?.name ?? 'Unknown Student',
+                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      Text(
+                        'Scanned at ${DateFormat('MMM dd, yyyy HH:mm').format(gatePass.usedAt ?? gatePass.updatedAt)}',
+                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color: AppTheme.textSecondary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.success.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'USED',
+                    style: TextStyle(
+                      color: AppTheme.success,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              gatePass.reason,
+              style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
@@ -620,11 +1011,16 @@ class _ActivePassCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isExpired = gatePass.validUntil.isBefore(DateTime.now());
+    
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
+        border: isExpired 
+            ? Border.all(color: AppTheme.error.withOpacity(0.3))
+            : null,
         boxShadow: [
           BoxShadow(
             color: Colors.black.withOpacity(0.05),
@@ -641,13 +1037,13 @@ class _ActivePassCard extends StatelessWidget {
             Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: AppTheme.info.withOpacity(0.2),
-                  child: Text(
-                    gatePass.student?.name.substring(0, 1).toUpperCase() ?? 'S',
-                    style: TextStyle(
-                      color: AppTheme.info,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  backgroundColor: isExpired 
+                      ? AppTheme.error.withOpacity(0.2)
+                      : AppTheme.success.withOpacity(0.2),
+                  child: Icon(
+                    isExpired ? Icons.timer_off : Icons.access_time,
+                    color: isExpired ? AppTheme.error : AppTheme.success,
+                    size: 20,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -656,60 +1052,60 @@ class _ActivePassCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        gatePass.student?.name ?? 'Student',
+                        gatePass.student?.name ?? 'Unknown Student',
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Text(
-                        gatePass.reason,
+                        'Valid until ${DateFormat('MMM dd, yyyy HH:mm').format(gatePass.validUntil)}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppTheme.textSecondary,
+                          color: isExpired ? AppTheme.error : AppTheme.textSecondary,
                         ),
                       ),
                     ],
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppTheme.info.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    'Active',
-                    style: TextStyle(
-                      color: AppTheme.info,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                if (!isExpired)
+                  ElevatedButton.icon(
+                    onPressed: onProcess,
+                    icon: const Icon(Icons.qr_code_scanner, size: 16),
+                    label: const Text('Process'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryYellow,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     ),
                   ),
-                ),
               ],
             ),
             const SizedBox(height: 12),
             Text(
-              'Valid until: ${DateFormat('MMM dd, yyyy HH:mm').format(gatePass.validUntil)}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
+              gatePass.reason,
+              style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
             ),
-            if (gatePass.teacher != null) ...[
-              const SizedBox(height: 4),
-              Text(
-                'Approved by: ${gatePass.teacher!.name}',
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppTheme.textSecondary,
+            if (isExpired) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.error.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning, color: AppTheme.error, size: 16),
+                    const SizedBox(width: 8),
+                    Text(
+                      'This pass has expired',
+                      style: TextStyle(color: AppTheme.error, fontSize: 12),
+                    ),
+                  ],
                 ),
               ),
             ],
-            const SizedBox(height: 16),
-            CustomButton(
-              onPressed: onProcess,
-              text: 'Process Gate Pass',
-              icon: Icons.send,
-              width: double.infinity,
-            ),
           ],
         ),
       ),
