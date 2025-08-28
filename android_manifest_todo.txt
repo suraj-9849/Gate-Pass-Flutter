@@ -1,0 +1,1 @@
+# Replace content of android/app/src/main/AndroidManifest.xml with provided content
