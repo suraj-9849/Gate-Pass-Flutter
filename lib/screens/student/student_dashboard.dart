@@ -227,8 +227,14 @@ class _StudentDashboardState extends State<StudentDashboard>
         label: const Text('New Request'),
       ),
       
-      // Modals
-      bottomSheet: _showRequestForm ? _NewRequestForm() : null,
+      // Modals - Fixed navigation issue here
+      bottomSheet: _showRequestForm ? _NewRequestForm(
+        onClose: () {
+          if (mounted) {
+            setState(() => _showRequestForm = false);
+          }
+        },
+      ) : null,
     );
   }
 
@@ -360,19 +366,25 @@ class _AllPassesTab extends StatelessWidget {
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: passes.length,
-          itemBuilder: (context, index) {
-            final pass = passes[index];
-            return _GatePassCard(
-              gatePass: pass,
-              onQRTap: pass.qrCode != null 
-                  ? () => (context.findAncestorStateOfType<_StudentDashboardState>())
-                      ?._showQRDialog(pass.qrCode!)
-                  : null,
-            );
+        return RefreshIndicator(
+          onRefresh: () async {
+            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            await gatePassProvider.loadStudentPasses(token: authProvider.token);
           },
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: passes.length,
+            itemBuilder: (context, index) {
+              final pass = passes[index];
+              return _GatePassCard(
+                gatePass: pass,
+                onQRTap: pass.qrCode != null 
+                    ? () => (context.findAncestorStateOfType<_StudentDashboardState>())
+                        ?._showQRDialog(pass.qrCode!)
+                    : null,
+              );
+            },
+          ),
         );
       },
     );
@@ -403,13 +415,19 @@ class _PendingPassesTab extends StatelessWidget {
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: pendingPasses.length,
-          itemBuilder: (context, index) {
-            final pass = pendingPasses[index];
-            return _GatePassCard(gatePass: pass);
+        return RefreshIndicator(
+          onRefresh: () async {
+            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            await gatePassProvider.loadStudentPasses(token: authProvider.token);
           },
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: pendingPasses.length,
+            itemBuilder: (context, index) {
+              final pass = pendingPasses[index];
+              return _GatePassCard(gatePass: pass);
+            },
+          ),
         );
       },
     );
@@ -440,19 +458,25 @@ class _ApprovedPassesTab extends StatelessWidget {
           );
         }
 
-        return ListView.builder(
-          padding: const EdgeInsets.all(16),
-          itemCount: approvedPasses.length,
-          itemBuilder: (context, index) {
-            final pass = approvedPasses[index];
-            return _GatePassCard(
-              gatePass: pass,
-              onQRTap: pass.qrCode != null 
-                  ? () => (context.findAncestorStateOfType<_StudentDashboardState>())
-                      ?._showQRDialog(pass.qrCode!)
-                  : null,
-            );
+        return RefreshIndicator(
+          onRefresh: () async {
+            final authProvider = Provider.of<AuthProvider>(context, listen: false);
+            await gatePassProvider.loadStudentPasses(token: authProvider.token);
           },
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: approvedPasses.length,
+            itemBuilder: (context, index) {
+              final pass = approvedPasses[index];
+              return _GatePassCard(
+                gatePass: pass,
+                onQRTap: pass.qrCode != null 
+                    ? () => (context.findAncestorStateOfType<_StudentDashboardState>())
+                        ?._showQRDialog(pass.qrCode!)
+                    : null,
+              );
+            },
+          ),
         );
       },
     );
@@ -710,9 +734,14 @@ class _DetailRow extends StatelessWidget {
   }
 }
 
-// New Request Form
+// New Request Form - Fixed navigation issues
 class _NewRequestForm extends StatefulWidget {
-  const _NewRequestForm({super.key});
+  final VoidCallback onClose;
+  
+  const _NewRequestForm({
+    super.key,
+    required this.onClose,
+  });
 
   @override
   State<_NewRequestForm> createState() => _NewRequestFormState();
@@ -727,6 +756,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
   Teacher? _selectedTeacher;
   List<Teacher> _teachers = [];
   bool _isLoading = false;
+  bool _isSubmitting = false; // Added separate submission state
   bool _loadingTeachers = true;
   String? _errorMessage;
 
@@ -812,6 +842,9 @@ class _NewRequestFormState extends State<_NewRequestForm> {
   }
 
   Future<void> _submitRequest() async {
+    // Prevent multiple submissions
+    if (_isSubmitting) return;
+    
     if (!_formKey.currentState!.validate()) return;
     
     if (_selectedTeacher == null) {
@@ -824,9 +857,15 @@ class _NewRequestFormState extends State<_NewRequestForm> {
       return;
     }
 
-    setState(() => _isLoading = true);
+    // Hide keyboard first to prevent navigation conflicts
+    FocusScope.of(context).unfocus();
+
+    setState(() => _isSubmitting = true);
 
     try {
+      // Small delay to ensure keyboard is hidden
+      await Future.delayed(const Duration(milliseconds: 100));
+      
       final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       
@@ -842,13 +881,22 @@ class _NewRequestFormState extends State<_NewRequestForm> {
       );
 
       if (success) {
-        Navigator.pop(context);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Gate pass request submitted successfully'),
-            backgroundColor: AppTheme.success,
-          ),
-        );
+        // Refresh the data
+        await gatePassProvider.loadStudentPasses(token: authProvider.token);
+        
+        // Close form safely
+        if (mounted) {
+          await Future.delayed(const Duration(milliseconds: 100));
+          widget.onClose();
+          
+          // Show success message
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Gate pass request submitted successfully'),
+              backgroundColor: AppTheme.success,
+            ),
+          );
+        }
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
@@ -865,7 +913,9 @@ class _NewRequestFormState extends State<_NewRequestForm> {
         ),
       );
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
     }
   }
 
@@ -907,7 +957,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                   ),
                 ),
                 IconButton(
-                  onPressed: () => Navigator.pop(context),
+                  onPressed: _isSubmitting ? null : widget.onClose,
                   icon: const Icon(Icons.close),
                 ),
               ],
@@ -1025,7 +1075,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                                   hint: Text('Choose your teacher (${_teachers.length} available)'),
                                   isExpanded: true,
                                   underline: const SizedBox(),
-                                  onChanged: (teacher) => setState(() => _selectedTeacher = teacher),
+                                  onChanged: _isSubmitting ? null : (teacher) => setState(() => _selectedTeacher = teacher),
                                   items: _teachers.map((teacher) => DropdownMenuItem(
                                     value: teacher,
                                     child: Text('${teacher.name} (${teacher.email})'),
@@ -1040,6 +1090,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       label: 'Reason for Leaving',
                       hintText: 'Enter the reason for your gate pass',
                       maxLines: 3,
+                      enabled: !_isSubmitting,
                       validator: (value) {
                         if (value?.isEmpty ?? true) {
                           return 'Please enter a reason';
@@ -1055,7 +1106,8 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       label: 'Request Date & Time',
                       hintText: 'Select date and time',
                       suffixIcon: Icons.calendar_today,
-                      onSuffixTap: () => _selectDateTime(_requestDateController),
+                      enabled: !_isSubmitting,
+                      onSuffixTap: _isSubmitting ? null : () => _selectDateTime(_requestDateController),
                       validator: (value) {
                         if (value?.isEmpty ?? true) {
                           return 'Please select request date';
@@ -1071,7 +1123,8 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                       label: 'Valid Until',
                       hintText: 'Select validity date and time',
                       suffixIcon: Icons.calendar_today,
-                      onSuffixTap: () => _selectDateTime(_validUntilController),
+                      enabled: !_isSubmitting,
+                      onSuffixTap: _isSubmitting ? null : () => _selectDateTime(_validUntilController),
                       validator: (value) {
                         if (value?.isEmpty ?? true) {
                           return 'Please select validity date';
@@ -1083,15 +1136,15 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                     
                     // Submit Button
                     CustomButton(
-                      onPressed: (_isLoading || _loadingTeachers || _teachers.isEmpty) 
+                      onPressed: (_isSubmitting || _loadingTeachers || _teachers.isEmpty) 
                           ? null 
                           : _submitRequest,
-                      text: _isLoading 
+                      text: _isSubmitting 
                           ? 'Submitting...' 
                           : _loadingTeachers 
                               ? 'Loading Teachers...' 
                               : 'Submit Request',
-                      isLoading: _isLoading || _loadingTeachers,
+                      isLoading: _isSubmitting,
                     ),
                     const SizedBox(height: 32),
                   ],
