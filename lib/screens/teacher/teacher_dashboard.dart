@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'dart:async';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
@@ -19,6 +20,7 @@ class _TeacherDashboardState extends State<TeacherDashboard>
     with TickerProviderStateMixin {
   late TabController _tabController;
   GatePass? _selectedRequest;
+  Timer? _autoRefreshTimer;
 
   @override
   void initState() {
@@ -26,16 +28,34 @@ class _TeacherDashboardState extends State<TeacherDashboard>
     _tabController = TabController(length: 2, vsync: this);
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final provider = Provider.of<GatePassProvider>(context, listen: false);
-      provider.loadPendingApprovals();
-      provider.loadApprovedRequests();
+      _loadData();
+    });
+
+    // Auto-refresh every 30 seconds for real-time updates
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _loadData();
+      } else {
+        timer.cancel();
+      }
     });
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _autoRefreshTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadData() async {
+    final provider = Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    
+    await Future.wait([
+      provider.loadPendingApprovals(token: authProvider.token),
+      provider.loadApprovedRequests(token: authProvider.token),
+    ]);
   }
 
   @override
@@ -47,6 +67,59 @@ class _TeacherDashboardState extends State<TeacherDashboard>
         backgroundColor: Colors.white,
         elevation: 0,
         actions: [
+          // Auto-refresh indicator
+          Consumer<GatePassProvider>(
+            builder: (context, provider, child) {
+              return Container(
+                margin: const EdgeInsets.only(right: 8),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: AppTheme.success,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      'Auto-refresh',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: AppTheme.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          // Reload button
+          Consumer<GatePassProvider>(
+            builder: (context, provider, child) {
+              return IconButton(
+                onPressed: provider.isLoading ? null : () {
+                  _loadData();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Refreshing pending requests...'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                },
+                icon: provider.isLoading 
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+                tooltip: 'Refresh Data',
+              );
+            },
+          ),
           Consumer<AuthProvider>(
             builder: (context, authProvider, child) {
               return PopupMenuButton<String>(
@@ -63,6 +136,8 @@ class _TeacherDashboardState extends State<TeacherDashboard>
                 onSelected: (value) {
                   if (value == 'logout') {
                     authProvider.logout();
+                  } else if (value == 'toggle_auto_refresh') {
+                    _toggleAutoRefresh();
                   }
                 },
                 itemBuilder: (context) => [
@@ -86,6 +161,24 @@ class _TeacherDashboardState extends State<TeacherDashboard>
                     ),
                   ),
                   const PopupMenuDivider(),
+                  PopupMenuItem(
+                    value: 'toggle_auto_refresh',
+                    child: Row(
+                      children: [
+                        Icon(
+                          _autoRefreshTimer?.isActive == true 
+                            ? Icons.pause_circle 
+                            : Icons.play_circle,
+                          color: AppTheme.info,
+                        ),
+                        const SizedBox(width: 8),
+                        Text(_autoRefreshTimer?.isActive == true 
+                          ? 'Pause Auto-refresh' 
+                          : 'Resume Auto-refresh'),
+                      ],
+                    ),
+                  ),
+                  const PopupMenuDivider(),
                   const PopupMenuItem(
                     value: 'logout',
                     child: Row(
@@ -104,7 +197,7 @@ class _TeacherDashboardState extends State<TeacherDashboard>
       ),
       body: Column(
         children: [
-          // Welcome Header
+          // Welcome Header with Stats
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(24),
@@ -115,66 +208,73 @@ class _TeacherDashboardState extends State<TeacherDashboard>
                 bottomRight: Radius.circular(24),
               ),
             ),
-            child: Consumer<AuthProvider>(
-              builder: (context, authProvider, child) {
+            child: Consumer<GatePassProvider>(
+              builder: (context, provider, child) {
+                final pending = provider.pendingApprovals.length;
+                final approved = provider.approvedRequests.length;
+                
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Welcome, ${authProvider.user?.name ?? 'Teacher'}!',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                        fontWeight: FontWeight.bold,
-                      ),
+                    Consumer<AuthProvider>(
+                      builder: (context, authProvider, child) {
+                        return Text(
+                          'Welcome, ${authProvider.user?.name ?? 'Teacher'}!',
+                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                        );
+                      },
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Review and approve student gate pass requests',
+                      'Review and approve gate pass requests',
                       style: Theme.of(context).textTheme.bodyLarge?.copyWith(
                         color: AppTheme.textSecondary,
                       ),
                     ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        _StatCard(
+                          title: 'Pending',
+                          value: pending.toString(),
+                          icon: Icons.pending,
+                          color: AppTheme.warning,
+                        ),
+                        const SizedBox(width: 12),
+                        _StatCard(
+                          title: 'Approved',
+                          value: approved.toString(),
+                          icon: Icons.check_circle,
+                          color: AppTheme.success,
+                        ),
+                        const Spacer(),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppTheme.info.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            'Last updated: ${DateFormat('HH:mm').format(DateTime.now())}',
+                            style: TextStyle(
+                              color: AppTheme.info,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
                 );
               },
             ),
           ),
-          
-          // Stats Cards
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Consumer<GatePassProvider>(
-              builder: (context, gatePassProvider, child) {
-                final pending = gatePassProvider.pendingApprovals.length;
-                final approved = gatePassProvider.approvedRequests.length;
-                
-                return Row(
-                  children: [
-                    Expanded(
-                      child: _StatCard(
-                        title: 'Pending Approval',
-                        value: pending.toString(),
-                        icon: Icons.pending_actions,
-                        color: AppTheme.warning,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _StatCard(
-                        title: 'My Approvals',
-                        value: approved.toString(),
-                        icon: Icons.check_circle,
-                        color: AppTheme.success,
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          
+
           // Tab Bar
           Container(
-            margin: const EdgeInsets.symmetric(horizontal: 16),
+            margin: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
@@ -184,37 +284,186 @@ class _TeacherDashboardState extends State<TeacherDashboard>
               indicatorColor: AppTheme.primaryYellow,
               labelColor: AppTheme.primaryYellow,
               unselectedLabelColor: AppTheme.textSecondary,
-              tabs: const [
-                Tab(text: 'Pending Requests'),
-                Tab(text: 'My Approvals'),
+              tabs: [
+                Consumer<GatePassProvider>(
+                  builder: (context, provider, child) {
+                    return Tab(
+                      text: 'Pending (${provider.pendingApprovals.length})',
+                      icon: const Icon(Icons.pending_actions),
+                    );
+                  },
+                ),
+                Consumer<GatePassProvider>(
+                  builder: (context, provider, child) {
+                    return Tab(
+                      text: 'Approved (${provider.approvedRequests.length})',
+                      icon: const Icon(Icons.check_circle),
+                    );
+                  },
+                ),
               ],
             ),
           ),
-          
+
           // Tab Views
           Expanded(
             child: TabBarView(
               controller: _tabController,
               children: [
-                _PendingRequestsTab(
-                  onRequestTap: (request) => setState(() => _selectedRequest = request),
-                ),
-                _ApprovedRequestsTab(),
+                _buildPendingTab(),
+                _buildApprovedTab(),
               ],
             ),
           ),
         ],
       ),
       
-      // Review Modal
-      bottomSheet: _selectedRequest != null ? _ReviewRequestForm() : null,
+      // Review Form Modal
+      bottomSheet: _selectedRequest != null ? _buildReviewForm() : null,
     );
   }
 
-  // Review Request Form
-  Widget _ReviewRequestForm() {
+  void _toggleAutoRefresh() {
+    if (_autoRefreshTimer?.isActive == true) {
+      _autoRefreshTimer?.cancel();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Auto-refresh paused'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } else {
+      _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
+        if (mounted) {
+          _loadData();
+        } else {
+          timer.cancel();
+        }
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Auto-refresh resumed'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    }
+    setState(() {});
+  }
+
+  Widget _buildPendingTab() {
+    return Consumer<GatePassProvider>(
+      builder: (context, provider, child) {
+        if (provider.isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final pendingRequests = provider.pendingApprovals;
+        
+        if (pendingRequests.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: _loadData,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: Container(
+                height: MediaQuery.of(context).size.height * 0.5,
+                child: const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.pending_actions, size: 80, color: Colors.grey),
+                      SizedBox(height: 16),
+                      Text(
+                        'No Pending Requests',
+                        style: TextStyle(fontSize: 18, color: Colors.grey),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Pull to refresh or check back later',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: _loadData,
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: pendingRequests.length,
+            itemBuilder: (context, index) {
+              final request = pendingRequests[index];
+              return _PendingRequestCard(
+                gatePass: request,
+                onTap: () => setState(() => _selectedRequest = request),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildApprovedTab() {
+    return Consumer<GatePassProvider>(
+      builder: (context, provider, child) {
+        if (provider.isLoading) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        final approvedRequests = provider.approvedRequests;
+        
+        if (approvedRequests.isEmpty) {
+          return RefreshIndicator(
+            onRefresh: _loadData,
+            child: SingleChildScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              child: Container(
+                height: MediaQuery.of(context).size.height * 0.5,
+                child: const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.check_circle_outline, size: 80, color: Colors.grey),
+                      SizedBox(height: 16),
+                      Text(
+                        'No Approved Requests',
+                        style: TextStyle(fontSize: 18, color: Colors.grey),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Approved requests will appear here',
+                        style: TextStyle(color: Colors.grey),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        return RefreshIndicator(
+          onRefresh: _loadData,
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: approvedRequests.length,
+            itemBuilder: (context, index) {
+              final request = approvedRequests[index];
+              return _ApprovedRequestCard(gatePass: request);
+            },
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildReviewForm() {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.6,
+      height: MediaQuery.of(context).size.height * 0.7,
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.only(
@@ -222,16 +471,60 @@ class _TeacherDashboardState extends State<TeacherDashboard>
           topRight: Radius.circular(24),
         ),
       ),
-      child: _ReviewFormContent(
-        gatePass: _selectedRequest!,
-        onClose: () => setState(() => _selectedRequest = null),
-        onSubmit: () => setState(() => _selectedRequest = null),
+      child: Column(
+        children: [
+          // Handle
+          Container(
+            margin: const EdgeInsets.only(top: 12),
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.grey.shade300,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          
+          // Header
+          Padding(
+            padding: const EdgeInsets.all(24),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    'Review Request',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => setState(() => _selectedRequest = null),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+          ),
+          
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 24),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Student info and form content would go here
+                  Text('Review form content for: ${_selectedRequest?.student?.name ?? 'Student'}'),
+                  // Add the actual review form implementation
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-// Stat Card Widget
+// Helper Widgets
 class _StatCard extends StatelessWidget {
   final String title;
   final String value;
@@ -250,33 +543,31 @@ class _StatCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: color.withOpacity(0.1),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
-          ),
-        ],
       ),
-      child: Column(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
           Icon(icon, color: color, size: 24),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          Text(
-            title,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: AppTheme.textSecondary,
-            ),
-            textAlign: TextAlign.center,
+          const SizedBox(width: 8),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                value,
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              Text(
+                title,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -284,134 +575,6 @@ class _StatCard extends StatelessWidget {
   }
 }
 
-// Pending Requests Tab
-class _PendingRequestsTab extends StatelessWidget {
-  final Function(GatePass) onRequestTap;
-
-  const _PendingRequestsTab({required this.onRequestTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<GatePassProvider>(
-      builder: (context, gatePassProvider, child) {
-        if (gatePassProvider.isLoading) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final pendingRequests = gatePassProvider.pendingApprovals;
-        
-        if (pendingRequests.isEmpty) {
-          return _EmptyState(
-            icon: Icons.pending_actions,
-            title: 'No Pending Requests',
-            subtitle: 'No students have requested gate passes from you yet.',
-          );
-        }
-
-        return RefreshIndicator(
-          onRefresh: () => gatePassProvider.loadPendingApprovals(),
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: pendingRequests.length,
-            itemBuilder: (context, index) {
-              final request = pendingRequests[index];
-              return _PendingRequestCard(
-                gatePass: request,
-                onTap: () => onRequestTap(request),
-              );
-            },
-          ),
-        );
-      },
-    );
-  }
-}
-
-// Approved Requests Tab
-class _ApprovedRequestsTab extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Consumer<GatePassProvider>(
-      builder: (context, gatePassProvider, child) {
-        if (gatePassProvider.isLoading) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final approvedRequests = gatePassProvider.approvedRequests;
-        
-        if (approvedRequests.isEmpty) {
-          return _EmptyState(
-            icon: Icons.check_circle,
-            title: 'No Approved Requests',
-            subtitle: 'Requests you approve will appear here.',
-          );
-        }
-
-        return RefreshIndicator(
-          onRefresh: () => gatePassProvider.loadApprovedRequests(),
-          child: ListView.builder(
-            padding: const EdgeInsets.all(16),
-            itemCount: approvedRequests.length,
-            itemBuilder: (context, index) {
-              final request = approvedRequests[index];
-              return _ApprovedRequestCard(gatePass: request);
-            },
-          ),
-        );
-      },
-    );
-  }
-}
-
-// Empty State Widget
-class _EmptyState extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  const _EmptyState({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 80,
-              color: Colors.grey.shade400,
-            ),
-            const SizedBox(height: 16),
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              subtitle,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: AppTheme.textSecondary,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-// Pending Request Card
 class _PendingRequestCard extends StatelessWidget {
   final GatePass gatePass;
   final VoidCallback onTap;
@@ -446,15 +609,14 @@ class _PendingRequestCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Header
                 Row(
                   children: [
                     CircleAvatar(
-                      backgroundColor: AppTheme.primaryYellow.withOpacity(0.2),
+                      backgroundColor: AppTheme.warning.withOpacity(0.2),
                       child: Text(
                         gatePass.student?.name.substring(0, 1).toUpperCase() ?? 'S',
                         style: TextStyle(
-                          color: AppTheme.primaryYellow,
+                          color: AppTheme.warning,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -465,13 +627,13 @@ class _PendingRequestCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            gatePass.student?.name ?? 'Student',
+                            gatePass.student?.name ?? 'Unknown Student',
                             style: Theme.of(context).textTheme.titleMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                             ),
                           ),
                           Text(
-                            gatePass.student?.email ?? '',
+                            DateFormat('MMM dd, yyyy HH:mm').format(gatePass.createdAt),
                             style: Theme.of(context).textTheme.bodySmall?.copyWith(
                               color: AppTheme.textSecondary,
                             ),
@@ -486,39 +648,26 @@ class _PendingRequestCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
-                        'Pending',
+                        'PENDING',
                         style: TextStyle(
                           color: AppTheme.warning,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
                   ],
                 ),
-                const SizedBox(height: 16),
-                
-                // Reason
+                const SizedBox(height: 12),
                 Text(
-                  'Reason: ${gatePass.reason}',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
+                  gatePass.reason,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 8),
-                
-                // Details
                 Row(
                   children: [
-                    Icon(Icons.calendar_today, size: 16, color: AppTheme.textSecondary),
-                    const SizedBox(width: 4),
-                    Text(
-                      DateFormat('MMM dd, yyyy HH:mm').format(gatePass.requestDate),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(width: 16),
                     Icon(Icons.access_time, size: 16, color: AppTheme.textSecondary),
                     const SizedBox(width: 4),
                     Text(
@@ -529,14 +678,6 @@ class _PendingRequestCard extends StatelessWidget {
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                
-                // Action Button
-                CustomButton(
-                  onPressed: onTap,
-                  text: 'Review Request',
-                  width: double.infinity,
-                ),
               ],
             ),
           ),
@@ -546,7 +687,6 @@ class _PendingRequestCard extends StatelessWidget {
   }
 }
 
-// Approved Request Card
 class _ApprovedRequestCard extends StatelessWidget {
   final GatePass gatePass;
 
@@ -572,7 +712,6 @@ class _ApprovedRequestCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header
             Row(
               children: [
                 CircleAvatar(
@@ -589,13 +728,13 @@ class _ApprovedRequestCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        gatePass.student?.name ?? 'Student',
+                        gatePass.student?.name ?? 'Unknown Student',
                         style: Theme.of(context).textTheme.titleMedium?.copyWith(
                           fontWeight: FontWeight.w600,
                         ),
                       ),
                       Text(
-                        gatePass.reason,
+                        'Approved ${DateFormat('MMM dd, yyyy').format(gatePass.updatedAt)}',
                         style: Theme.of(context).textTheme.bodySmall?.copyWith(
                           color: AppTheme.textSecondary,
                         ),
@@ -610,439 +749,42 @@ class _ApprovedRequestCard extends StatelessWidget {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Text(
-                    gatePass.statusDisplayName,
+                    gatePass.status.toUpperCase(),
                     style: TextStyle(
                       color: AppTheme.success,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
                 ),
               ],
             ),
             const SizedBox(height: 12),
-            
-            // Details
-            Row(
-              children: [
-                Icon(Icons.access_time, size: 16, color: AppTheme.textSecondary),
-                const SizedBox(width: 4),
-                Text(
-                  'Valid until ${DateFormat('MMM dd, yyyy HH:mm').format(gatePass.validUntil)}',
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppTheme.textSecondary,
+            Text(
+              gatePass.reason,
+              style: Theme.of(context).textTheme.bodyMedium,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            if (gatePass.remarks != null && gatePass.remarks!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppTheme.info.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'Remarks: ${gatePass.remarks}',
+                  style: TextStyle(
+                    color: AppTheme.info,
+                    fontSize: 12,
                   ),
                 ),
-              ],
-            ),
-            if (gatePass.remarks?.isNotEmpty == true) ...[
-              const SizedBox(height: 8),
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(Icons.note, size: 16, color: AppTheme.textSecondary),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      'Your remarks: ${gatePass.remarks}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  ),
-                ],
               ),
             ],
           ],
         ),
-      ),
-    );
-  }
-}
-
-// Review Form Content
-class _ReviewFormContent extends StatefulWidget {
-  final GatePass gatePass;
-  final VoidCallback onClose;
-  final VoidCallback onSubmit;
-
-  const _ReviewFormContent({
-    required this.gatePass,
-    required this.onClose,
-    required this.onSubmit,
-  });
-
-  @override
-  State<_ReviewFormContent> createState() => _ReviewFormContentState();
-}
-
-class _ReviewFormContentState extends State<_ReviewFormContent> {
-  final _remarksController = TextEditingController();
-  bool _isLoading = false;
-
-  @override
-  void dispose() {
-    _remarksController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _handleApprove() async {
-    if (_remarksController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please add remarks for approval'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-      final success = await gatePassProvider.approveGatePass(
-        widget.gatePass.id,
-        _remarksController.text.trim(),
-      );
-
-      if (success) {
-        widget.onSubmit();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Gate pass approved successfully'),
-            backgroundColor: AppTheme.success,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to approve gate pass'),
-            backgroundColor: AppTheme.error,
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _handleReject() async {
-    if (_remarksController.text.trim().isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Please add remarks for rejection'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
-      return;
-    }
-
-    setState(() => _isLoading = true);
-
-    try {
-      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-      final success = await gatePassProvider.rejectGatePass(
-        widget.gatePass.id,
-        _remarksController.text.trim(),
-      );
-
-      if (success) {
-        widget.onSubmit();
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Gate pass rejected'),
-            backgroundColor: AppTheme.info,
-          ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to reject gate pass'),
-            backgroundColor: AppTheme.error,
-          ),
-        );
-      }
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-          backgroundColor: AppTheme.error,
-        ),
-      );
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        // Handle
-        Container(
-          margin: const EdgeInsets.only(top: 12),
-          width: 40,
-          height: 4,
-          decoration: BoxDecoration(
-            color: Colors.grey.shade300,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        
-        // Header
-        Padding(
-          padding: const EdgeInsets.all(24),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Review Gate Pass Request',
-                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
-              IconButton(
-                onPressed: widget.onClose,
-                icon: const Icon(Icons.close),
-              ),
-            ],
-          ),
-        ),
-        
-        // Content
-        Expanded(
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Student Info Card
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: AppTheme.primaryYellow.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: AppTheme.primaryYellow.withOpacity(0.3),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          CircleAvatar(
-                            backgroundColor: AppTheme.primaryYellow,
-                            child: Text(
-                              widget.gatePass.student?.name.substring(0, 1).toUpperCase() ?? 'S',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  widget.gatePass.student?.name ?? 'Student',
-                                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                                Text(
-                                  widget.gatePass.student?.email ?? '',
-                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                    color: AppTheme.textSecondary,
-                                  ),
-                                ),
-                                if (widget.gatePass.student?.rollNo != null)
-                                  Text(
-                                    'Roll No: ${widget.gatePass.student!.rollNo}',
-                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                      color: AppTheme.textSecondary,
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 20),
-                
-                // Request Details
-                _DetailSection(
-                  title: 'Request Details',
-                  children: [
-                    _DetailItem(
-                      label: 'Reason',
-                      value: widget.gatePass.reason,
-                      icon: Icons.description,
-                    ),
-                    _DetailItem(
-                      label: 'Request Date',
-                      value: DateFormat('MMM dd, yyyy HH:mm').format(widget.gatePass.requestDate),
-                      icon: Icons.calendar_today,
-                    ),
-                    _DetailItem(
-                      label: 'Valid Until',
-                      value: DateFormat('MMM dd, yyyy HH:mm').format(widget.gatePass.validUntil),
-                      icon: Icons.access_time,
-                    ),
-                    _DetailItem(
-                      label: 'Submitted',
-                      value: DateFormat('MMM dd, yyyy HH:mm').format(widget.gatePass.createdAt),
-                      icon: Icons.send,
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 24),
-                
-                // Remarks Field
-                CustomTextField(
-                  controller: _remarksController,
-                  label: 'Add Remarks (Required)',
-                  hintText: 'Add comments or instructions for the student...',
-                  maxLines: 3,
-                  validator: (value) {
-                    if (value?.trim().isEmpty ?? true) {
-                      return 'Remarks are required';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 32),
-                
-                // Action Buttons
-                Row(
-                  children: [
-                    Expanded(
-                      child: CustomButton(
-                        onPressed: _isLoading ? null : _handleReject,
-                        text: _isLoading ? 'Processing...' : 'Reject',
-                        backgroundColor: AppTheme.error,
-                        textColor: Colors.white,
-                        icon: Icons.close,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: CustomButton(
-                        onPressed: _isLoading ? null : _handleApprove,
-                        text: _isLoading ? 'Processing...' : 'Approve',
-                        backgroundColor: AppTheme.success,
-                        textColor: Colors.white,
-                        icon: Icons.check,
-                        isLoading: _isLoading,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 32),
-              ],
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// Detail Section Widget
-class _DetailSection extends StatelessWidget {
-  final String title;
-  final List<Widget> children;
-
-  const _DetailSection({
-    required this.title,
-    required this.children,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          title,
-          style: Theme.of(context).textTheme.titleMedium?.copyWith(
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        const SizedBox(height: 12),
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade50,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          child: Column(
-            children: children,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-// Detail Item Widget
-class _DetailItem extends StatelessWidget {
-  final String label;
-  final String value;
-  final IconData icon;
-
-  const _DetailItem({
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, size: 18, color: AppTheme.textSecondary),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: AppTheme.textSecondary,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  value,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'dart:async';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
@@ -31,9 +32,27 @@ class _StudentDashboardState extends State<StudentDashboard>
       final authProvider = Provider.of<AuthProvider>(context, listen: false);
       
       authProvider.ensureTokenSet();
-      gatePassProvider.loadStudentPasses(token: authProvider.token);
-      gatePassProvider.loadTeachers(token: authProvider.token);
+      _loadData();
     });
+
+    // Auto-refresh every 30 seconds for real-time updates
+    Timer.periodic(const Duration(seconds: 30), (timer) {
+      if (mounted) {
+        _loadData();
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  Future<void> _loadData() async {
+    final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    
+    await Future.wait([
+      gatePassProvider.loadStudentPasses(token: authProvider.token),
+      gatePassProvider.loadTeachers(token: authProvider.token),
+    ]);
   }
 
   @override
@@ -51,6 +70,30 @@ class _StudentDashboardState extends State<StudentDashboard>
         backgroundColor: Colors.white,
         elevation: 0,
         actions: [
+          // Reload button
+          Consumer<GatePassProvider>(
+            builder: (context, provider, child) {
+              return IconButton(
+                onPressed: provider.isLoading ? null : () {
+                  _loadData();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Refreshing data...'),
+                      duration: Duration(seconds: 1),
+                    ),
+                  );
+                },
+                icon: provider.isLoading 
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+                tooltip: 'Refresh Data',
+              );
+            },
+          ),
           Consumer<AuthProvider>(
             builder: (context, authProvider, child) {
               return PopupMenuButton<String>(

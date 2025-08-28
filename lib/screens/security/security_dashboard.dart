@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'dart:async';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
@@ -26,9 +27,9 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   bool _showScanner = false;
   bool _showManualEntry = false;
   final TextEditingController _qrController = TextEditingController();
+  Timer? _autoRefreshTimer;
 
   // QR Scanner controller
-  // QRViewController? _qrController; // Uncomment when using qr_code_scanner
   final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
 
   @override
@@ -36,12 +37,22 @@ class _SecurityDashboardState extends State<SecurityDashboard>
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
     _loadData();
+
+    // Auto-refresh every 20 seconds for security dashboard
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 20), (timer) {
+      if (mounted && !_showScanner && !_showManualEntry) {
+        _loadData();
+      } else if (!mounted) {
+        timer.cancel();
+      }
+    });
   }
 
   @override
   void dispose() {
     _tabController.dispose();
     _qrController.dispose();
+    _autoRefreshTimer?.cancel();
     super.dispose();
   }
 
@@ -156,7 +167,7 @@ class _SecurityDashboardState extends State<SecurityDashboard>
       return;
     }
 
-    // Hide scanner/manual entry
+    // Hide scanner/manual entry immediately after scan
     setState(() {
       _showScanner = false;
       _showManualEntry = false;
@@ -190,17 +201,11 @@ class _SecurityDashboardState extends State<SecurityDashboard>
       Navigator.pop(context);
 
       if (success) {
-        // Reload data
+        // Reload data to refresh the lists
         await _loadData();
         
-        // Show success dialog
-        _showScanResultDialog(
-          success: true,
-          title: 'QR Code Scanned Successfully',
-          message: 'Gate pass has been processed and marked as used.',
-          icon: Icons.check_circle,
-          iconColor: AppTheme.success,
-        );
+        // Show detailed success dialog with student exit confirmation
+        _showExitConfirmationDialog(qrCode);
         
         // Clear manual input
         _qrController.clear();
@@ -214,8 +219,10 @@ class _SecurityDashboardState extends State<SecurityDashboard>
         );
       }
     } catch (e) {
-      // Close processing dialog
-      Navigator.pop(context);
+      // Close processing dialog if still open
+      if (Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
       
       _showScanResultDialog(
         success: false,
@@ -225,6 +232,140 @@ class _SecurityDashboardState extends State<SecurityDashboard>
         iconColor: AppTheme.warning,
       );
     }
+  }
+
+  void _showExitConfirmationDialog(String qrCode) {
+    // Find the gate pass that was just scanned to get student details
+    final scannedPass = _activePasses.firstWhere(
+      (pass) => pass.qrCode == qrCode,
+      orElse: () => _scannedPasses.isNotEmpty ? _scannedPasses.first : GatePass(
+        id: '',
+        studentId: '',
+        reason: 'Gate pass processed',
+        status: 'USED',
+        requestDate: DateTime.now(),
+        validUntil: DateTime.now(),
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      ),
+    );
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Success icon with animation-like effect
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: AppTheme.success.withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.check_circle,
+                size: 64,
+                color: AppTheme.success,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'Student Exit Confirmed',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                fontWeight: FontWeight.bold,
+                color: AppTheme.success,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.info.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  if (scannedPass.student?.name != null) ...[
+                    Text(
+                      'Student: ${scannedPass.student!.name}',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                  ],
+                  Text(
+                    'Exit Time: ${DateFormat('MMM dd, yyyy HH:mm').format(DateTime.now())}',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Gate pass has been marked as USED',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: AppTheme.textSecondary,
+                      fontStyle: FontStyle.italic,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: AppTheme.warning.withOpacity(0.3)),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info, color: AppTheme.warning, size: 20),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Teacher and student will be notified of the exit',
+                      style: TextStyle(
+                        color: AppTheme.warning,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              // Automatically show scanner again for next scan
+              Future.delayed(const Duration(milliseconds: 500), () {
+                if (mounted) {
+                  _startQRScanner();
+                }
+              });
+            },
+            child: const Text('Scan Next'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppTheme.success,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Done'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showScanResultDialog({
@@ -298,6 +439,53 @@ class _SecurityDashboardState extends State<SecurityDashboard>
         backgroundColor: Colors.white,
         elevation: 0,
         actions: [
+          // Auto-refresh status
+          Container(
+            margin: const EdgeInsets.only(right: 8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: _autoRefreshTimer?.isActive == true 
+                        ? AppTheme.success 
+                        : Colors.grey,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  'Live',
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Reload button
+          IconButton(
+            onPressed: _isLoading ? null : () {
+              _loadData();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Refreshing gate pass data...'),
+                  duration: Duration(seconds: 1),
+                ),
+              );
+            },
+            icon: _isLoading 
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.refresh),
+            tooltip: 'Refresh Data',
+          ),
           Consumer<AuthProvider>(
             builder: (context, authProvider, child) {
               return PopupMenuButton<String>(
