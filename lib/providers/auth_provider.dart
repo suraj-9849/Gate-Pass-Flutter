@@ -34,7 +34,7 @@ class AuthProvider extends ChangeNotifier {
         _apiService.setToken(_token!);
       }
     } catch (e) {
-      debugPrint('Error initializing auth: $e');
+      await _clearAuthData();
     } finally {
       _isInitialized = true;
       notifyListeners();
@@ -63,7 +63,16 @@ class AuthProvider extends ChangeNotifier {
         return AuthResult.error('Invalid response from server');
       }
     } catch (e) {
-      return AuthResult.error(e.toString());
+      String errorMessage = e.toString();
+      if (errorMessage.contains('User not found')) {
+        errorMessage = 'No account found with this email address.';
+      } else if (errorMessage.contains('Invalid password')) {
+        errorMessage = 'Incorrect password. Please try again.';
+      } else if (errorMessage.contains('Network error')) {
+        errorMessage = 'Unable to connect to server. Please check your internet connection.';
+      }
+      
+      return AuthResult.error(errorMessage);
     } finally {
       _setLoading(false);
     }
@@ -98,7 +107,14 @@ class AuthProvider extends ChangeNotifier {
         return AuthResult.error('Invalid response from server');
       }
     } catch (e) {
-      return AuthResult.error(e.toString());
+      String errorMessage = e.toString();
+      if (errorMessage.contains('User already exists')) {
+        errorMessage = 'An account with this email already exists.';
+      } else if (errorMessage.contains('Network error')) {
+        errorMessage = 'Unable to connect to server. Please check your internet connection.';
+      }
+      
+      return AuthResult.error(errorMessage);
     } finally {
       _setLoading(false);
     }
@@ -106,16 +122,13 @@ class AuthProvider extends ChangeNotifier {
 
   Future<void> logout() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('auth_token');
-      await prefs.remove('user_data');
+      await _clearAuthData();
     } catch (e) {
-      debugPrint('Error clearing auth data: $e');
+      _token = null;
+      _user = null;
+      _apiService.clearToken();
     }
 
-    _token = null;
-    _user = null;
-    _apiService.clearToken();
     notifyListeners();
   }
 
@@ -125,13 +138,43 @@ class AuthProvider extends ChangeNotifier {
       await prefs.setString('auth_token', _token!);
       await prefs.setString('user_data', jsonEncode(_user!.toJson()));
     } catch (e) {
-      debugPrint('Error saving auth data: $e');
+      // Handle save error silently
     }
+  }
+
+  Future<void> _clearAuthData() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('auth_token');
+      await prefs.remove('user_data');
+    } catch (e) {
+      // Handle clear error silently
+    }
+
+    _token = null;
+    _user = null;
+    _apiService.clearToken();
   }
 
   void _setLoading(bool loading) {
     _isLoading = loading;
     notifyListeners();
+  }
+
+  void ensureTokenSet() {
+    if (_token != null) {
+      _apiService.setToken(_token!);
+    }
+  }
+
+  Future<void> refreshUser() async {
+    if (_token == null) return;
+    
+    try {
+      ensureTokenSet();
+    } catch (e) {
+      // Handle refresh error silently
+    }
   }
 }
 

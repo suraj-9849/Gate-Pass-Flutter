@@ -27,7 +27,12 @@ class _StudentDashboardState extends State<StudentDashboard>
     _tabController = TabController(length: 3, vsync: this);
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Provider.of<GatePassProvider>(context, listen: false).loadStudentPasses();
+      final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      
+      authProvider.ensureTokenSet();
+      gatePassProvider.loadStudentPasses(token: authProvider.token);
+      gatePassProvider.loadTeachers(token: authProvider.token);
     });
   }
 
@@ -722,6 +727,8 @@ class _NewRequestFormState extends State<_NewRequestForm> {
   Teacher? _selectedTeacher;
   List<Teacher> _teachers = [];
   bool _isLoading = false;
+  bool _loadingTeachers = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -738,16 +745,42 @@ class _NewRequestFormState extends State<_NewRequestForm> {
   }
 
   Future<void> _loadTeachers() async {
+    setState(() {
+      _loadingTeachers = true;
+      _errorMessage = null;
+    });
+    
     try {
       final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
-      await gatePassProvider.loadTeachers();
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
+      
+      if (authProvider.token == null) {
+        throw Exception('No authentication token found');
+      }
+      
+      authProvider.ensureTokenSet();
+      await gatePassProvider.loadTeachers(token: authProvider.token);
+      
+      final teachersList = gatePassProvider.teachers;
+      
       setState(() {
-        _teachers = gatePassProvider.teachers;
+        _teachers = List.from(teachersList);
+        _loadingTeachers = false;
+        _errorMessage = null;
       });
+      
+      if (_teachers.isEmpty) {
+        setState(() {
+          _errorMessage = 'No approved teachers found. Please contact your administrator.';
+        });
+      }
+      
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading teachers: $e')),
-      );
+      setState(() {
+        _loadingTeachers = false;
+        _errorMessage = 'Failed to load teachers: $e';
+        _teachers = [];
+      });
     }
   }
 
@@ -780,9 +813,13 @@ class _NewRequestFormState extends State<_NewRequestForm> {
 
   Future<void> _submitRequest() async {
     if (!_formKey.currentState!.validate()) return;
+    
     if (_selectedTeacher == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select a teacher')),
+        const SnackBar(
+          content: Text('Please select a teacher'),
+          backgroundColor: AppTheme.error,
+        ),
       );
       return;
     }
@@ -791,6 +828,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
 
     try {
       final gatePassProvider = Provider.of<GatePassProvider>(context, listen: false);
+      final authProvider = Provider.of<AuthProvider>(context, listen: false);
       
       final requestDate = DateFormat('MMM dd, yyyy HH:mm').parse(_requestDateController.text);
       final validUntil = DateFormat('MMM dd, yyyy HH:mm').parse(_validUntilController.text);
@@ -800,6 +838,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
         teacherId: _selectedTeacher!.id,
         requestDate: requestDate,
         validUntil: validUntil,
+        token: authProvider.token,
       );
 
       if (success) {
@@ -813,7 +852,7 @@ class _NewRequestFormState extends State<_NewRequestForm> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Failed to submit request'),
+            content: Text('Failed to submit request. Please try again.'),
             backgroundColor: AppTheme.error,
           ),
         );
@@ -884,6 +923,48 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    // Error Message Display
+                    if (_errorMessage != null) ...[
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppTheme.error.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppTheme.error.withOpacity(0.3)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(Icons.error, color: AppTheme.error, size: 20),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    _errorMessage!,
+                                    style: TextStyle(color: AppTheme.error),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Row(
+                              children: [
+                                CustomButton(
+                                  onPressed: _loadTeachers,
+                                  text: 'Retry',
+                                  backgroundColor: AppTheme.error,
+                                  textColor: Colors.white,
+                                  width: 100,
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
+                    
                     // Teacher Selection
                     Text(
                       'Select Teacher',
@@ -900,17 +981,56 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                         border: Border.all(color: Colors.grey.shade300),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: DropdownButton<Teacher>(
-                        value: _selectedTeacher,
-                        hint: const Text('Choose your teacher'),
-                        isExpanded: true,
-                        underline: const SizedBox(),
-                        onChanged: (teacher) => setState(() => _selectedTeacher = teacher),
-                        items: _teachers.map((teacher) => DropdownMenuItem(
-                          value: teacher,
-                          child: Text('${teacher.name} (${teacher.email})'),
-                        )).toList(),
-                      ),
+                      child: _loadingTeachers
+                          ? const Padding(
+                              padding: EdgeInsets.all(16),
+                              child: Row(
+                                children: [
+                                  SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                  ),
+                                  SizedBox(width: 12),
+                                  Text('Loading teachers...'),
+                                ],
+                              ),
+                            )
+                          : _teachers.isEmpty
+                              ? Padding(
+                                  padding: const EdgeInsets.all(16),
+                                  child: Column(
+                                    children: [
+                                      Icon(Icons.warning, color: AppTheme.warning, size: 30),
+                                      const SizedBox(height: 8),
+                                      const Text(
+                                        'No teachers available',
+                                        style: TextStyle(fontWeight: FontWeight.bold),
+                                      ),
+                                      const Text(
+                                        'Please contact your administrator',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      CustomButton(
+                                        onPressed: _loadTeachers,
+                                        text: 'Reload',
+                                        width: 100,
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : DropdownButton<Teacher>(
+                                  value: _selectedTeacher,
+                                  hint: Text('Choose your teacher (${_teachers.length} available)'),
+                                  isExpanded: true,
+                                  underline: const SizedBox(),
+                                  onChanged: (teacher) => setState(() => _selectedTeacher = teacher),
+                                  items: _teachers.map((teacher) => DropdownMenuItem(
+                                    value: teacher,
+                                    child: Text('${teacher.name} (${teacher.email})'),
+                                  )).toList(),
+                                ),
                     ),
                     const SizedBox(height: 20),
                     
@@ -963,9 +1083,15 @@ class _NewRequestFormState extends State<_NewRequestForm> {
                     
                     // Submit Button
                     CustomButton(
-                      onPressed: _isLoading ? null : _submitRequest,
-                      text: _isLoading ? 'Submitting...' : 'Submit Request',
-                      isLoading: _isLoading,
+                      onPressed: (_isLoading || _loadingTeachers || _teachers.isEmpty) 
+                          ? null 
+                          : _submitRequest,
+                      text: _isLoading 
+                          ? 'Submitting...' 
+                          : _loadingTeachers 
+                              ? 'Loading Teachers...' 
+                              : 'Submit Request',
+                      isLoading: _isLoading || _loadingTeachers,
                     ),
                     const SizedBox(height: 32),
                   ],
