@@ -4,7 +4,7 @@ import 'package:logger/logger.dart';
 
 class ApiService {
   // Update this to match your backend URL
-  static const String baseUrl = 'http://localhost:3001/api';
+  static const String baseUrl = 'http://10.0.2.2:3001/api';
   // For Android emulator use: 'http://10.0.2.2:3001/api'
   // For iOS simulator use: 'http://localhost:3001/api'
   // For physical device use your computer's IP: 'http://192.168.1.xxx:3001/api'

@@ -1,48 +1,47 @@
 name: gate_pass_flutter
 description: Gate Pass Management System Flutter App
 
-publish_to: 'none'
+publish_to: "none"
 version: 1.0.0+1
 
 environment:
-  sdk: '>=3.0.0 <4.0.0'
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
-  
+
   # State Management
   provider: ^6.1.1
-  
+
   # HTTP Requests
   http: ^1.1.0
   dio: ^5.3.2
-  
+
   # Local Storage
   shared_preferences: ^2.2.2
-  
-  # QR Code
+
+  # QR Code - Updated packages for better compatibility
   qr_flutter: ^4.1.0
-  qr_code_scanner: ^1.0.1
-  
+  mobile_scanner: ^3.5.6 # Better alternative to qr_code_scanner
+
   # Navigation
   go_router: ^12.1.3
-  
+
   # UI Components
   flutter_svg: ^2.0.9
   cached_network_image: ^3.3.0
   shimmer: ^3.0.0
-  
+
   # Utils
   intl: ^0.19.0
   uuid: ^4.1.0
   logger: ^2.0.2+1
-  
+
   # Icons
   cupertino_icons: ^1.0.2
-  
-  # Camera & Permissions
-  camera: ^0.10.5+5
+
+  # Permissions - Updated for better compatibility
   permission_handler: ^11.0.1
 
 dev_dependencies:
@@ -52,18 +51,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  
-  assets:
-    - assets/images/
-    - assets/icons/
-    
-  fonts:
-    - family: Inter
-      fonts:
-        - asset: assets/fonts/Inter-Regular.ttf
-        - asset: assets/fonts/Inter-Medium.ttf
-          weight: 500
-        - asset: assets/fonts/Inter-SemiBold.ttf
-          weight: 600
-        - asset: assets/fonts/Inter-Bold.ttf
-          weight: 700

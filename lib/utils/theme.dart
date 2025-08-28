@@ -15,7 +15,7 @@ class AppTheme {
 
   static ThemeData lightTheme = ThemeData(
     useMaterial3: true,
-    fontFamily: 'Inter',
+    // Removed custom fontFamily to use system default
     primaryColor: primaryYellow,
     scaffoldBackgroundColor: backgroundLight,
     colorScheme: ColorScheme.fromSeed(
@@ -38,7 +38,7 @@ class AppTheme {
         color: textPrimary,
         fontSize: 18,
         fontWeight: FontWeight.w600,
-        fontFamily: 'Inter',
+        // Removed custom fontFamily
       ),
     ),
     
@@ -108,7 +108,7 @@ class AppTheme {
       hintStyle: TextStyle(color: textSecondary.withOpacity(0.7)),
     ),
     
-    // Text Theme
+    // Text Theme (using default system fonts)
     textTheme: const TextTheme(
       displayLarge: TextStyle(
         fontSize: 32,

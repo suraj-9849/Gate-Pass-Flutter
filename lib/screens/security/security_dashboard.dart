@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import 'package:qr_code_scanner/qr_code_scanner.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
@@ -22,8 +22,7 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   List<GatePass> _scannedPasses = [];
   bool _isLoading = false;
   bool _showScanner = false;
-  QRViewController? _qrController;
-  final GlobalKey _qrKey = GlobalKey(debugLabel: 'QR');
+  MobileScannerController? _scannerController;
 
   @override
   void initState() {
@@ -34,7 +33,7 @@ class _SecurityDashboardState extends State<SecurityDashboard>
 
   @override
   void dispose() {
-    _qrController?.dispose();
+    _scannerController?.dispose();
     _tabController.dispose();
     super.dispose();
   }
@@ -84,13 +83,14 @@ class _SecurityDashboardState extends State<SecurityDashboard>
     }
   }
 
-  void _onQRViewCreated(QRViewController controller) {
-    _qrController = controller;
-    controller.scannedDataStream.listen((scanData) {
-      if (scanData.code != null) {
-        _scanQRCode(scanData.code!);
+  void _onDetect(BarcodeCapture capture) {
+    final List<Barcode> barcodes = capture.barcodes;
+    for (final barcode in barcodes) {
+      if (barcode.rawValue != null) {
+        _scanQRCode(barcode.rawValue!);
+        break;
       }
-    });
+    }
   }
 
   @override
@@ -352,15 +352,19 @@ class _SecurityDashboardState extends State<SecurityDashboard>
         // Scanner
         Expanded(
           flex: 4,
-          child: QRView(
-            key: _qrKey,
-            onQRViewCreated: _onQRViewCreated,
-            overlay: QrScannerOverlayShape(
-              borderColor: AppTheme.primaryYellow,
-              borderRadius: 16,
-              borderLength: 30,
-              borderWidth: 8,
-              cutOutSize: 250,
+          child: MobileScanner(
+            controller: _scannerController,
+            onDetect: _onDetect,
+            overlay: Container(
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: AppTheme.primaryYellow,
+                  width: 4,
+                ),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              width: 250,
+              height: 250,
             ),
           ),
         ),
@@ -451,7 +455,7 @@ class _SecurityDashboardState extends State<SecurityDashboard>
   }
 }
 
-// Helper Widgets
+// Helper Widgets (same as before)
 class _StatCard extends StatelessWidget {
   final String title;
   final String value;
