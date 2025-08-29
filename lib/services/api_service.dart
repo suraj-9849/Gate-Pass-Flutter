@@ -6,7 +6,7 @@ class ApiService {
   // For Android emulator: 'http://10.0.2.2:3001/api'
   // For iOS simulator: 'http://localhost:3001/api' 
   // For physical device: 'http://YOUR_COMPUTER_IP:3001/api'
-  static const String baseUrl = 'http://192.168.1.11:3001/api';
+  static const String baseUrl = 'http://192.168.1.9:3001/api';
   
   String? _token;
   
