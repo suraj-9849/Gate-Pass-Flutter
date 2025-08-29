@@ -1,15 +1,18 @@
+// lib/main.dart
 import 'package:flutter/material.dart';
-import 'package:gate_pass_flutter/screens/profile/profile_page.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
+import 'package:google_fonts/google_fonts.dart'; // Add this import
 import 'providers/auth_provider.dart';
 import 'providers/gate_pass_provider.dart';
+import 'providers/admin_provider.dart'; // Add this import
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/student/student_dashboard.dart';
 import 'screens/teacher/teacher_dashboard.dart';
 import 'screens/admin/admin_dashboard.dart';
+import 'screens/admin/approved_students_screen.dart'; // Add this import
 import 'screens/security/security_dashboard.dart';
 import 'utils/theme.dart';
 
@@ -26,12 +29,22 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => GatePassProvider()),
+        ChangeNotifierProvider(create: (_) => AdminProvider()), // Add this line
       ],
       child: Consumer<AuthProvider>(
         builder: (context, authProvider, child) {
           return MaterialApp.router(
             title: 'Gate Pass Management',
-            theme: AppTheme.lightTheme,
+            theme: AppTheme.lightTheme.copyWith(
+              // Override the theme with Poppins font family
+              textTheme: GoogleFonts.poppinsTextTheme(
+                AppTheme.lightTheme.textTheme,
+              ),
+              // Also apply to primary text theme for consistency
+              primaryTextTheme: GoogleFonts.poppinsTextTheme(
+                AppTheme.lightTheme.primaryTextTheme,
+              ),
+            ),
             debugShowCheckedModeBanner: false,
             routerConfig: _createRouter(authProvider),
           );
@@ -54,12 +67,13 @@ class MyApp extends StatelessWidget {
 
         // If logged in and trying to access auth routes
         if (isLoggedIn && _isAuthRoute(state.matchedLocation)) {
-          return _getDashboardRoute(user?.role ?? '');
+          return _getDashboardRoute(user?.role ?? 'STUDENT');
         }
 
         return null;
       },
       routes: [
+        // Public routes
         GoRoute(
           path: '/splash',
           builder: (context, state) => const SplashScreen(),
@@ -72,6 +86,8 @@ class MyApp extends StatelessWidget {
           path: '/register',
           builder: (context, state) => const RegisterScreen(),
         ),
+
+        // Protected routes
         GoRoute(
           path: '/student',
           builder: (context, state) => const StudentDashboard(),
@@ -85,40 +101,36 @@ class MyApp extends StatelessWidget {
           builder: (context, state) => const AdminDashboard(),
         ),
         GoRoute(
-          path: '/security',
-          builder: (context, state) => const SecurityDashboard(),
+          path: '/admin/approved-students',
+          builder: (context, state) => const ApprovedStudentsScreen(),
         ),
         GoRoute(
-          path: '/profile',
-          name: 'profile',
-          builder: (context, state) => const ProfilePage(),
+          path: '/security',
+          builder: (context, state) => const SecurityDashboard(),
         ),
       ],
     );
   }
 
   bool _isPublicRoute(String route) {
-    const publicRoutes = ['/splash', '/login', '/register'];
-    return publicRoutes.contains(route);
+    return ['/splash', '/login', '/register'].contains(route);
   }
 
   bool _isAuthRoute(String route) {
-    const authRoutes = ['/login', '/register'];
-    return authRoutes.contains(route);
+    return ['/login', '/register', '/splash'].contains(route);
   }
 
   String _getDashboardRoute(String role) {
-    switch (role) {
+    switch (role.toUpperCase()) {
       case 'SUPER_ADMIN':
         return '/admin';
       case 'TEACHER':
         return '/teacher';
-      case 'STUDENT':
-        return '/student';
       case 'SECURITY':
         return '/security';
+      case 'STUDENT':
       default:
-        return '/login';
+        return '/student';
     }
   }
 }

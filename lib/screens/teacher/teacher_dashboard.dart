@@ -5,9 +5,6 @@ import 'dart:async';
 import '../../providers/auth_provider.dart';
 import '../../providers/gate_pass_provider.dart';
 import '../../models/gate_pass_model.dart';
-import '../../utils/theme.dart';
-import '../../widgets/custom_button.dart';
-import '../../widgets/custom_text_field.dart';
 
 class TeacherDashboard extends StatefulWidget {
   const TeacherDashboard({super.key});
@@ -19,31 +16,39 @@ class TeacherDashboard extends StatefulWidget {
 class _TeacherDashboardState extends State<TeacherDashboard>
     with TickerProviderStateMixin {
   late TabController _tabController;
-  GatePass? _selectedRequest;
+  late AnimationController _animationController;
+  late Animation<double> _slideAnimation;
+  final TextEditingController _remarksController = TextEditingController();
   Timer? _autoRefreshTimer;
+  bool _isProcessing = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _slideAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOutCubic),
+    );
     
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
+      _animationController.forward();
     });
 
-    // Auto-refresh every 30 seconds for real-time updates
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-      if (mounted) {
-        _loadData();
-      } else {
-        timer.cancel();
-      }
+      if (mounted) _loadData();
     });
   }
 
   @override
   void dispose() {
     _tabController.dispose();
+    _animationController.dispose();
+    _remarksController.dispose();
     _autoRefreshTimer?.cancel();
     super.dispose();
   }
@@ -58,348 +63,616 @@ class _TeacherDashboardState extends State<TeacherDashboard>
     ]);
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.backgroundLight,
-      appBar: AppBar(
-        title: const Text('Teacher Dashboard'),
-        backgroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          // Auto-refresh indicator
-          Consumer<GatePassProvider>(
-            builder: (context, provider, child) {
-              return Container(
-                margin: const EdgeInsets.only(right: 8),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: AppTheme.success,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Auto-refresh',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  ],
+  Future<void> _approveRequest(GatePass gatePass) async {
+    if (_isProcessing) return;
+    
+    setState(() => _isProcessing = true);
+
+    final provider = Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    try {
+      final success = await provider.approveGatePass(
+        gatePass.id,
+        _remarksController.text.trim().isEmpty 
+          ? 'Approved by teacher' 
+          : _remarksController.text.trim(),
+        token: authProvider.token,
+      );
+
+      if (mounted) {
+        if (success) {
+          _showSuccessSnackbar('Gate pass approved successfully!');
+          _remarksController.clear();
+          Navigator.pop(context);
+          await _loadData();
+        } else {
+          _showErrorSnackbar('Failed to approve gate pass. Please try again.');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorSnackbar('Error: ${e.toString()}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  Future<void> _rejectRequest(GatePass gatePass) async {
+    if (_isProcessing) return;
+    
+    final remarks = _remarksController.text.trim();
+    if (remarks.isEmpty) {
+      _showErrorSnackbar('Please provide remarks for rejection');
+      return;
+    }
+
+    setState(() => _isProcessing = true);
+
+    final provider = Provider.of<GatePassProvider>(context, listen: false);
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+
+    try {
+      final success = await provider.rejectGatePass(
+        gatePass.id,
+        remarks,
+        token: authProvider.token,
+      );
+
+      if (mounted) {
+        if (success) {
+          _showSuccessSnackbar('Gate pass rejected');
+          _remarksController.clear();
+          Navigator.pop(context);
+          await _loadData();
+        } else {
+          _showErrorSnackbar('Failed to reject gate pass. Please try again.');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorSnackbar('Error: ${e.toString()}');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  void _showSuccessSnackbar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  void _showErrorSnackbar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.error, color: Colors.white),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  void _showRequestDetails(GatePass gatePass) {
+    _remarksController.clear();
+    
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) => _buildRequestDetailsSheet(gatePass),
+    );
+  }
+
+  void _showProfileMenu() {
+    final authProvider = Provider.of<AuthProvider>(context, listen: false);
+    
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        margin: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFFFFB703), Color(0xFFFD9843)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
                 ),
-              );
-            },
-          ),
-          // Reload button
-          Consumer<GatePassProvider>(
-            builder: (context, provider, child) {
-              return IconButton(
-                onPressed: provider.isLoading ? null : () {
-                  _loadData();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Refreshing pending requests...'),
-                      duration: Duration(seconds: 1),
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(50),
                     ),
-                  );
-                },
-                icon: provider.isLoading 
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-                tooltip: 'Refresh Data',
-              );
-            },
-          ),
-          Consumer<AuthProvider>(
-            builder: (context, authProvider, child) {
-              return PopupMenuButton<String>(
-                icon: CircleAvatar(
-                  backgroundColor: AppTheme.primaryYellow,
-                  child: Text(
-                    authProvider.user?.name.substring(0, 1).toUpperCase() ?? 'T',
-                    style: const TextStyle(
-                      color: Colors.black,
-                      fontWeight: FontWeight.bold,
+                    child: const Icon(
+                      Icons.person,
+                      color: Colors.white,
+                      size: 32,
                     ),
                   ),
-                ),
-                onSelected: (value) {
-                  if (value == 'logout') {
-                    authProvider.logout();
-                  } else if (value == 'toggle_auto_refresh') {
-                    _toggleAutoRefresh();
-                  }
-                },
-                itemBuilder: (context) => [
-                  PopupMenuItem(
-                    enabled: false,
+                  const SizedBox(width: 16),
+                  Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
                           authProvider.user?.name ?? 'Teacher',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        Text(
-                          authProvider.user?.roleDisplayName ?? 'Teacher',
-                          style: TextStyle(
-                            color: AppTheme.textSecondary,
-                            fontSize: 12,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  PopupMenuItem(
-                    value: 'toggle_auto_refresh',
-                    child: Row(
-                      children: [
-                        Icon(
-                          _autoRefreshTimer?.isActive == true 
-                            ? Icons.pause_circle 
-                            : Icons.play_circle,
-                          color: AppTheme.info,
-                        ),
-                        const SizedBox(width: 8),
-                        Text(_autoRefreshTimer?.isActive == true 
-                          ? 'Pause Auto-refresh' 
-                          : 'Resume Auto-refresh'),
-                      ],
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: 'logout',
-                    child: Row(
-                      children: [
-                        Icon(Icons.logout, color: AppTheme.error),
-                        SizedBox(width: 8),
-                        Text('Logout'),
-                      ],
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Welcome Header with Stats
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(24),
-            decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.only(
-                bottomLeft: Radius.circular(24),
-                bottomRight: Radius.circular(24),
-              ),
-            ),
-            child: Consumer<GatePassProvider>(
-              builder: (context, provider, child) {
-                final pending = provider.pendingApprovals.length;
-                final approved = provider.approvedRequests.length;
-                
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Consumer<AuthProvider>(
-                      builder: (context, authProvider, child) {
-                        return Text(
-                          'Welcome, ${authProvider.user?.name ?? 'Teacher'}!',
-                          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
                             fontWeight: FontWeight.bold,
                           ),
-                        );
-                      },
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Review and approve gate pass requests',
-                      style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        _StatCard(
-                          title: 'Pending',
-                          value: pending.toString(),
-                          icon: Icons.pending,
-                          color: AppTheme.warning,
                         ),
-                        const SizedBox(width: 12),
-                        _StatCard(
-                          title: 'Approved',
-                          value: approved.toString(),
-                          icon: Icons.check_circle,
-                          color: AppTheme.success,
+                        Text(
+                          authProvider.user?.email ?? '',
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.9),
+                            fontSize: 14,
+                          ),
                         ),
-                        const Spacer(),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          margin: const EdgeInsets.only(top: 4),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                           decoration: BoxDecoration(
-                            color: AppTheme.info.withOpacity(0.1),
+                            color: Colors.white.withOpacity(0.2),
                             borderRadius: BorderRadius.circular(12),
                           ),
-                          child: Text(
-                            'Last updated: ${DateFormat('HH:mm').format(DateTime.now())}',
+                          child: const Text(
+                            'Teacher',
                             style: TextStyle(
-                              color: AppTheme.info,
-                              fontSize: 10,
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
                             ),
                           ),
                         ),
                       ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  const Divider(),
+                  ListTile(
+                    leading: const Icon(Icons.logout, color: Colors.red),
+                    title: const Text('Logout', style: TextStyle(color: Colors.red)),
+                    onTap: () {
+                      Navigator.pop(context);
+                      authProvider.logout();
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
+      body: AnimatedBuilder(
+        animation: _slideAnimation,
+        builder: (context, child) {
+          return Transform.translate(
+            offset: Offset(0, 50 * (1 - _slideAnimation.value)),
+            child: Opacity(
+              opacity: _slideAnimation.value,
+              child: Column(
+                children: [
+                  _buildHeader(),
+                  _buildStatsSection(),
+                  _buildTabSection(),
+                  Expanded(child: _buildTabContent()),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      padding: const EdgeInsets.only(top: 50, left: 20, right: 20, bottom: 20),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFFFFB703), Color(0xFFFD9843)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Consumer<AuthProvider>(
+              builder: (context, authProvider, child) {
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Welcome back,',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.9),
+                        fontSize: 16,
+                      ),
+                    ),
+                    Text(
+                      authProvider.user?.name ?? 'Teacher',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Review and manage gate pass requests',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 14,
+                      ),
                     ),
                   ],
                 );
               },
             ),
           ),
-
-          // Tab Bar
-          Container(
-            margin: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: TabBar(
-              controller: _tabController,
-              indicatorColor: AppTheme.primaryYellow,
-              labelColor: AppTheme.primaryYellow,
-              unselectedLabelColor: AppTheme.textSecondary,
-              tabs: [
-                Consumer<GatePassProvider>(
-                  builder: (context, provider, child) {
-                    return Tab(
-                      text: 'Pending (${provider.pendingApprovals.length})',
-                      icon: const Icon(Icons.pending_actions),
-                    );
-                  },
+          Consumer<GatePassProvider>(
+            builder: (context, provider, child) {
+              return IconButton(
+                onPressed: provider.isLoading ? null : () {
+                  _loadData();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: const Text('Refreshing requests...'),
+                      duration: const Duration(seconds: 1),
+                      behavior: SnackBarBehavior.floating,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      margin: const EdgeInsets.all(16),
+                    ),
+                  );
+                },
+                icon: provider.isLoading
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                        ),
+                      )
+                    : const Icon(Icons.refresh, color: Colors.white, size: 28),
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.white.withOpacity(0.2),
+                  padding: const EdgeInsets.all(12),
                 ),
-                Consumer<GatePassProvider>(
-                  builder: (context, provider, child) {
-                    return Tab(
-                      text: 'Approved (${provider.approvedRequests.length})',
-                      icon: const Icon(Icons.check_circle),
-                    );
-                  },
-                ),
-              ],
-            ),
+              );
+            },
           ),
-
-          // Tab Views
-          Expanded(
-            child: TabBarView(
-              controller: _tabController,
-              children: [
-                _buildPendingTab(),
-                _buildApprovedTab(),
-              ],
+          const SizedBox(width: 12),
+          GestureDetector(
+            onTap: _showProfileMenu,
+            child: Consumer<AuthProvider>(
+              builder: (context, authProvider, child) {
+                return Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(50),
+                  ),
+                  child: Text(
+                    authProvider.user?.name.substring(0, 1).toUpperCase() ?? 'T',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
       ),
-      
-      // Review Form Modal
-      bottomSheet: _selectedRequest != null ? _buildReviewForm() : null,
     );
   }
 
-  void _toggleAutoRefresh() {
-    if (_autoRefreshTimer?.isActive == true) {
-      _autoRefreshTimer?.cancel();
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Auto-refresh paused'),
-          duration: Duration(seconds: 1),
+  Widget _buildStatsSection() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 20,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Consumer<GatePassProvider>(
+        builder: (context, provider, child) {
+          final pending = provider.pendingApprovals.length;
+          final approved = provider.approvedRequests.length;
+          final total = pending + approved;
+          
+          return Column(
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.analytics, color: Color(0xFFFFB703), size: 24),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Request Overview',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1E293B),
+                    ),
+                  ),
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF10B981),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        const Text(
+                          'Live',
+                          style: TextStyle(
+                            color: Color(0xFF10B981),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: _buildStatCard(
+                      'Total Requests',
+                      total.toString(),
+                      Icons.assignment,
+                      const Color(0xFF3B82F6),
+                      const Color(0xFFEFF6FF),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _buildStatCard(
+                      'Pending Review',
+                      pending.toString(),
+                      Icons.pending_actions,
+                      const Color(0xFFF59E0B),
+                      const Color(0xFFFEF3C7),
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: _buildStatCard(
+                      'Approved',
+                      approved.toString(),
+                      Icons.check_circle,
+                      const Color(0xFF10B981),
+                      const Color(0xFFD1FAE5),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildStatCard(String title, String value, IconData icon, Color color, Color bgColor) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 32),
+          const SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.bold,
+              color: color,
+            ),
+          ),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 12,
+              color: color.withOpacity(0.8),
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabSection() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            spreadRadius: 1,
+          ),
+        ],
+      ),
+      child: TabBar(
+        controller: _tabController,
+        indicator: BoxDecoration(
+          borderRadius: BorderRadius.circular(12),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFFFB703), Color(0xFFFD9843)],
+          ),
         ),
-      );
-    } else {
-      _autoRefreshTimer = Timer.periodic(const Duration(seconds: 30), (timer) {
-        if (mounted) {
-          _loadData();
-        } else {
-          timer.cancel();
-        }
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Auto-refresh resumed'),
-          duration: Duration(seconds: 1),
-        ),
-      );
-    }
-    setState(() {});
+        indicatorSize: TabBarIndicatorSize.tab,
+        indicatorPadding: const EdgeInsets.all(4),
+        labelColor: Colors.white,
+        unselectedLabelColor: const Color(0xFF64748B),
+        labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+        tabs: [
+          Consumer<GatePassProvider>(
+            builder: (context, provider, child) {
+              return Tab(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.pending_actions, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Pending (${provider.pendingApprovals.length})'),
+                  ],
+                ),
+              );
+            },
+          ),
+          Consumer<GatePassProvider>(
+            builder: (context, provider, child) {
+              return Tab(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.check_circle, size: 20),
+                    const SizedBox(width: 8),
+                    Text('Approved (${provider.approvedRequests.length})'),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTabContent() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      child: TabBarView(
+        controller: _tabController,
+        children: [
+          _buildPendingTab(),
+          _buildApprovedTab(),
+        ],
+      ),
+    );
   }
 
   Widget _buildPendingTab() {
     return Consumer<GatePassProvider>(
       builder: (context, provider, child) {
         if (provider.isLoading) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB703)),
+            ),
+          );
         }
 
         final pendingRequests = provider.pendingApprovals;
         
         if (pendingRequests.isEmpty) {
-          return RefreshIndicator(
-            onRefresh: _loadData,
-            child: SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Container(
-                height: MediaQuery.of(context).size.height * 0.5,
-                child: const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.pending_actions, size: 80, color: Colors.grey),
-                      SizedBox(height: 16),
-                      Text(
-                        'No Pending Requests',
-                        style: TextStyle(fontSize: 18, color: Colors.grey),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Pull to refresh or check back later',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          return _buildEmptyState(
+            Icons.pending_actions,
+            'No Pending Requests',
+            'All requests have been reviewed.\nNew requests will appear here.',
           );
         }
 
         return RefreshIndicator(
           onRefresh: _loadData,
+          color: const Color(0xFFFFB703),
           child: ListView.builder(
-            padding: const EdgeInsets.all(16),
             itemCount: pendingRequests.length,
             itemBuilder: (context, index) {
               final request = pendingRequests[index];
-              return _PendingRequestCard(
-                gatePass: request,
-                onTap: () => setState(() => _selectedRequest = request),
-              );
+              return _buildPendingRequestCard(request, index);
             },
           ),
         );
@@ -411,49 +684,31 @@ class _TeacherDashboardState extends State<TeacherDashboard>
     return Consumer<GatePassProvider>(
       builder: (context, provider, child) {
         if (provider.isLoading) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB703)),
+            ),
+          );
         }
 
         final approvedRequests = provider.approvedRequests;
         
         if (approvedRequests.isEmpty) {
-          return RefreshIndicator(
-            onRefresh: _loadData,
-            child: SingleChildScrollView(
-              physics: const AlwaysScrollableScrollPhysics(),
-              child: Container(
-                height: MediaQuery.of(context).size.height * 0.5,
-                child: const Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.check_circle_outline, size: 80, color: Colors.grey),
-                      SizedBox(height: 16),
-                      Text(
-                        'No Approved Requests',
-                        style: TextStyle(fontSize: 18, color: Colors.grey),
-                      ),
-                      SizedBox(height: 8),
-                      Text(
-                        'Approved requests will appear here',
-                        style: TextStyle(color: Colors.grey),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
+          return _buildEmptyState(
+            Icons.check_circle_outline,
+            'No Approved Requests',
+            'Approved requests will appear here.\nStart reviewing pending requests.',
           );
         }
 
         return RefreshIndicator(
           onRefresh: _loadData,
+          color: const Color(0xFFFFB703),
           child: ListView.builder(
-            padding: const EdgeInsets.all(16),
             itemCount: approvedRequests.length,
             itemBuilder: (context, index) {
               final request = approvedRequests[index];
-              return _ApprovedRequestCard(gatePass: request);
+              return _buildApprovedRequestCard(request, index);
             },
           ),
         );
@@ -461,45 +716,486 @@ class _TeacherDashboardState extends State<TeacherDashboard>
     );
   }
 
-  Widget _buildReviewForm() {
+  Widget _buildEmptyState(IconData icon, String title, String subtitle) {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFB703).withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              size: 48,
+              color: const Color(0xFFFFB703).withOpacity(0.6),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+              color: Color(0xFF1E293B),
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            subtitle,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 14,
+              color: Color(0xFF64748B),
+              height: 1.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPendingRequestCard(GatePass gatePass, int index) {
     return Container(
-      height: MediaQuery.of(context).size.height * 0.7,
+      margin: EdgeInsets.only(bottom: 16, top: index == 0 ? 16 : 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.08),
+            blurRadius: 20,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _showRequestDetails(gatePass),
+          borderRadius: BorderRadius.circular(20),
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFFFFB703), Color(0xFFFD9843)],
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Center(
+                        child: Text(
+                          gatePass.student?.name?.substring(0, 1).toUpperCase() ?? 'S',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            gatePass.student?.name ?? 'Unknown Student',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFF1E293B),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          if (gatePass.student?.rollNo != null)
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF3B82F6).withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                'Roll No: ${gatePass.student!.rollNo}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF3B82F6),
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 4),
+                          Text(
+                            gatePass.student?.email ?? 'No email',
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: Color(0xFF64748B),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF59E0B).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                          color: const Color(0xFFF59E0B).withOpacity(0.3),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: const BoxDecoration(
+                              color: Color(0xFFF59E0B),
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          const Text(
+                            'PENDING',
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFFF59E0B),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8FAFC),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Reason for Gate Pass:',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF475569),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        gatePass.reason,
+                        style: const TextStyle(
+                          fontSize: 16,
+                          color: Color(0xFF1E293B),
+                          height: 1.4,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.schedule,
+                      size: 16,
+                      color: Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Requested: ${DateFormat('MMM dd, yyyy • HH:mm').format(gatePass.createdAt)}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.access_time,
+                      size: 16,
+                      color: Color(0xFF64748B),
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Valid until: ${DateFormat('MMM dd, yyyy • HH:mm').format(gatePass.validUntil)}',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFF64748B),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Icon(
+                      Icons.touch_app,
+                      size: 16,
+                      color: Color(0xFFFFB703),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Tap to review and approve/reject',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFFFB703),
+                      ),
+                    ),
+                    const Spacer(),
+                    const Icon(
+                      Icons.arrow_forward_ios,
+                      size: 16,
+                      color: Color(0xFFFFB703),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildApprovedRequestCard(GatePass gatePass, int index) {
+    return Container(
+      margin: EdgeInsets.only(bottom: 16, top: index == 0 ? 16 : 0),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: const Color(0xFF10B981).withOpacity(0.2),
+          width: 1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF10B981).withOpacity(0.1),
+            blurRadius: 20,
+            spreadRadius: 1,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Icon(
+                    Icons.check_circle,
+                    color: Color(0xFF10B981),
+                    size: 28,
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        gatePass.student?.name ?? 'Unknown Student',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFF1E293B),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      if (gatePass.student?.rollNo != null)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF3B82F6).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: Text(
+                            'Roll No: ${gatePass.student!.rollNo}',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF3B82F6),
+                            ),
+                          ),
+                        ),
+                      const SizedBox(height: 4),
+                      Text(
+                        gatePass.student?.email ?? 'No email',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          color: Color(0xFF64748B),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    gatePass.status.toUpperCase(),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF10B981),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF0FDF4),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    gatePass.reason,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      color: Color(0xFF1E293B),
+                      height: 1.4,
+                    ),
+                  ),
+                  if (gatePass.remarks != null && gatePass.remarks!.isNotEmpty) ...[
+                    const SizedBox(height: 12),
+                    const Divider(color: Color(0xFF10B981)),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Remarks:',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF10B981),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      gatePass.remarks!,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF059669),
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Approved on ${DateFormat('MMM dd, yyyy • HH:mm').format(gatePass.updatedAt)}',
+              style: const TextStyle(
+                fontSize: 12,
+                color: Color(0xFF10B981),
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRequestDetailsSheet(GatePass gatePass) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.85,
       decoration: const BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
+          topLeft: Radius.circular(28),
+          topRight: Radius.circular(28),
         ),
       ),
       child: Column(
         children: [
-          // Handle
           Container(
             margin: const EdgeInsets.only(top: 12),
-            width: 40,
+            width: 48,
             height: 4,
             decoration: BoxDecoration(
-              color: Colors.grey.shade300,
+              color: const Color(0xFFE2E8F0),
               borderRadius: BorderRadius.circular(2),
             ),
           ),
           
-          // Header
-          Padding(
+          Container(
             padding: const EdgeInsets.all(24),
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                colors: [Color(0xFFFFB703), Color(0xFFFD9843)],
+              ),
+              borderRadius: BorderRadius.only(
+                topLeft: Radius.circular(28),
+                topRight: Radius.circular(28),
+              ),
+            ),
             child: Row(
               children: [
                 Expanded(
-                  child: Text(
-                    'Review Request',
-                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Gate Pass Request',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      Text(
+                        'Review and take action',
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.9),
+                          fontSize: 16,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
                 IconButton(
-                  onPressed: () => setState(() => _selectedRequest = null),
-                  icon: const Icon(Icons.close),
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, color: Colors.white, size: 28),
+                  style: IconButton.styleFrom(
+                    backgroundColor: Colors.white.withOpacity(0.2),
+                  ),
                 ),
               ],
             ),
@@ -507,13 +1203,221 @@ class _TeacherDashboardState extends State<TeacherDashboard>
           
           Expanded(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
+              padding: const EdgeInsets.all(24),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Student info and form content would go here
-                  Text('Review form content for: ${_selectedRequest?.student?.name ?? 'Student'}'),
-                  // Add the actual review form implementation
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF8FAFC),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Student Details',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF1E293B),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Row(
+                          children: [
+                            Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                gradient: const LinearGradient(
+                                  colors: [Color(0xFFFFB703), Color(0xFFFD9843)],
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  gatePass.student?.name?.substring(0, 1).toUpperCase() ?? 'S',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 24,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    gatePass.student?.name ?? 'Unknown Student',
+                                    style: const TextStyle(
+                                      fontSize: 20,
+                                      fontWeight: FontWeight.bold,
+                                      color: Color(0xFF1E293B),
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    gatePass.student?.email ?? 'No email',
+                                    style: const TextStyle(
+                                      fontSize: 16,
+                                      color: Color(0xFF64748B),
+                                    ),
+                                  ),
+                                  if (gatePass.student?.rollNo != null) ...[
+                                    const SizedBox(height: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF3B82F6).withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Text(
+                                        'Roll No: ${gatePass.student!.rollNo}',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                          color: Color(0xFF3B82F6),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 20),
+                  
+                  Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'Request Information',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: Color(0xFF1E293B),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        _buildInfoRow('Reason', gatePass.reason),
+                        const SizedBox(height: 12),
+                        _buildInfoRow(
+                          'Requested On',
+                          DateFormat('EEEE, MMM dd, yyyy • HH:mm').format(gatePass.createdAt),
+                        ),
+                        const SizedBox(height: 12),
+                        _buildInfoRow(
+                          'Valid Until',
+                          DateFormat('EEEE, MMM dd, yyyy • HH:mm').format(gatePass.validUntil),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 20),
+                  
+                  const Text(
+                    'Your Remarks (Optional for approval, required for rejection)',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF1E293B),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFE2E8F0)),
+                    ),
+                    child: TextField(
+                      controller: _remarksController,
+                      maxLines: 4,
+                      decoration: const InputDecoration(
+                        hintText: 'Add your remarks here...',
+                        border: InputBorder.none,
+                        contentPadding: EdgeInsets.all(16),
+                        hintStyle: TextStyle(color: Color(0xFF94A3B8)),
+                      ),
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 32),
+                  
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SizedBox(
+                          height: 56,
+                          child: ElevatedButton.icon(
+                            onPressed: _isProcessing ? null : () => _rejectRequest(gatePass),
+                            icon: _isProcessing
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
+                                  )
+                                : const Icon(Icons.close),
+                            label: const Text('Reject'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFEF4444),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: SizedBox(
+                          height: 56,
+                          child: ElevatedButton.icon(
+                            onPressed: _isProcessing ? null : () => _approveRequest(gatePass),
+                            icon: _isProcessing
+                                ? const SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)),
+                                  )
+                                : const Icon(Icons.check),
+                            label: const Text('Approve'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFF10B981),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              elevation: 0,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 20),
                 ],
               ),
             ),
@@ -522,270 +1426,28 @@ class _TeacherDashboardState extends State<TeacherDashboard>
       ),
     );
   }
-}
 
-// Helper Widgets
-class _StatCard extends StatelessWidget {
-  final String title;
-  final String value;
-  final IconData icon;
-  final Color color;
-
-  const _StatCard({
-    required this.title,
-    required this.value,
-    required this.icon,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.1),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 24),
-          const SizedBox(width: 8),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                value,
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: color,
-                ),
-              ),
-              Text(
-                title,
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: AppTheme.textSecondary,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PendingRequestCard extends StatelessWidget {
-  final GatePass gatePass;
-  final VoidCallback onTap;
-
-  const _PendingRequestCard({
-    required this.gatePass,
-    required this.onTap,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(16),
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    CircleAvatar(
-                      backgroundColor: AppTheme.warning.withOpacity(0.2),
-                      child: Text(
-                        gatePass.student?.name.substring(0, 1).toUpperCase() ?? 'S',
-                        style: TextStyle(
-                          color: AppTheme.warning,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            gatePass.student?.name ?? 'Unknown Student',
-                            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          Text(
-                            DateFormat('MMM dd, yyyy HH:mm').format(gatePass.createdAt),
-                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                              color: AppTheme.textSecondary,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: AppTheme.warning.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Text(
-                        'PENDING',
-                        style: TextStyle(
-                          color: AppTheme.warning,
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  gatePass.reason,
-                  style: Theme.of(context).textTheme.bodyMedium,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    Icon(Icons.access_time, size: 16, color: AppTheme.textSecondary),
-                    const SizedBox(width: 4),
-                    Text(
-                      'Until ${DateFormat('MMM dd, HH:mm').format(gatePass.validUntil)}',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                        color: AppTheme.textSecondary,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
+  Widget _buildInfoRow(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF64748B),
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _ApprovedRequestCard extends StatelessWidget {
-  final GatePass gatePass;
-
-  const _ApprovedRequestCard({required this.gatePass});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.05),
-            blurRadius: 10,
-            spreadRadius: 1,
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 16,
+            color: Color(0xFF1E293B),
           ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: AppTheme.success.withOpacity(0.2),
-                  child: Icon(
-                    Icons.check,
-                    color: AppTheme.success,
-                    size: 20,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        gatePass.student?.name ?? 'Unknown Student',
-                        style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      Text(
-                        'Approved ${DateFormat('MMM dd, yyyy').format(gatePass.updatedAt)}',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: AppTheme.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppTheme.success.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Text(
-                    gatePass.status.toUpperCase(),
-                    style: TextStyle(
-                      color: AppTheme.success,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            Text(
-              gatePass.reason,
-              style: Theme.of(context).textTheme.bodyMedium,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
-            ),
-            if (gatePass.remarks != null && gatePass.remarks!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppTheme.info.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(
-                  'Remarks: ${gatePass.remarks}',
-                  style: TextStyle(
-                    color: AppTheme.info,
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          ],
         ),
-      ),
+      ],
     );
   }
 }
