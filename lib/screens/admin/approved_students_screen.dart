@@ -1,7 +1,6 @@
-// lib/screens/admin/approved_students_screen.dart
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import '../../providers/admin_provider.dart';
 import '../../providers/auth_provider.dart';
 import '../../models/approved_student_model.dart';
@@ -14,12 +13,29 @@ class ApprovedStudentsScreen extends StatefulWidget {
 }
 
 class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  bool _isRefreshing = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
     });
+    
+    // Listen to search changes
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text;
+      });
+    });
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
@@ -29,47 +45,151 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
     await adminProvider.loadApprovedStudents(token: authProvider.token);
   }
 
+  Future<void> _refreshData() async {
+    setState(() {
+      _isRefreshing = true;
+    });
+
+    try {
+      await _loadData();
+    } finally {
+      setState(() {
+        _isRefreshing = false;
+      });
+    }
+  }
+
+  void _clearSearch() {
+    _searchController.clear();
+    setState(() {
+      _searchQuery = '';
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.grey[50],
       appBar: AppBar(
-        title: const Text('Approved Students'),
+        title: const Text(
+          'Approved Students',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
         backgroundColor: const Color(0xFFFFB703),
         foregroundColor: Colors.white,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _isRefreshing ? null : _refreshData,
+          ),
+        ],
       ),
       body: Consumer<AdminProvider>(
         builder: (context, adminProvider, child) {
           if (adminProvider.isLoadingApprovedStudents) {
             return const Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB703)),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFFB703)),
+                  ),
+                  SizedBox(height: 16),
+                  Text('Loading approved students...'),
+                ],
               ),
             );
           }
 
-          final approvedStudents = adminProvider.approvedStudents;
+          final allApprovedStudents = adminProvider.approvedStudents;
+          final filteredStudents = adminProvider.getFilteredApprovedStudents(_searchQuery);
           final stats = adminProvider.getApprovalStatsSummary();
 
-          if (approvedStudents.isEmpty) {
+          if (allApprovedStudents.isEmpty) {
             return _buildEmptyState();
           }
 
           return RefreshIndicator(
-            onRefresh: _loadData,
+            onRefresh: _refreshData,
             color: const Color(0xFFFFB703),
             child: Column(
               children: [
-                _buildStatsHeader(stats),
-                Expanded(
-                  child: ListView.builder(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: approvedStudents.length,
-                    itemBuilder: (context, index) {
-                      final student = approvedStudents[index];
-                      return _buildStudentCard(student);
-                    },
+                // Search Bar
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  color: Colors.white,
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: 'Search by name, email, or roll number...',
+                            prefixIcon: const Icon(
+                              Icons.search,
+                              color: Color(0xFFFFB703),
+                            ),
+                            suffixIcon: _searchQuery.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear),
+                                    onPressed: _clearSearch,
+                                  )
+                                : null,
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: BorderSide(color: Colors.grey[300]!),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              borderSide: const BorderSide(
+                                color: Color(0xFFFFB703),
+                                width: 2,
+                              ),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 16,
+                              vertical: 12,
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFB703).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${filteredStudents.length}/${allApprovedStudents.length}',
+                          style: const TextStyle(
+                            color: Color(0xFFFFB703),
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
+                ),
+
+                // Statistics Header
+                _buildStatsHeader(stats),
+
+                // Students List
+                Expanded(
+                  child: filteredStudents.isEmpty
+                      ? _buildNoResultsState()
+                      : ListView.builder(
+                          padding: const EdgeInsets.all(16),
+                          itemCount: filteredStudents.length,
+                          itemBuilder: (context, index) {
+                            return _buildStudentCard(filteredStudents[index]);
+                          },
+                        ),
                 ),
               ],
             ),
@@ -81,17 +201,19 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
 
   Widget _buildStatsHeader(Map<String, int> stats) {
     return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       padding: const EdgeInsets.all(16),
-      margin: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            const Color(0xFFFFB703).withOpacity(0.1),
-            const Color(0xFFFFB703).withOpacity(0.05),
-          ],
-        ),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFB703).withOpacity(0.3)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.grey.withOpacity(0.1),
+            spreadRadius: 1,
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -99,9 +221,9 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
           const Text(
             'Approval Statistics',
             style: TextStyle(
-              fontSize: 18,
+              fontSize: 16,
               fontWeight: FontWeight.bold,
-              color: Color(0xFFFFB703),
+              color: Colors.black87,
             ),
           ),
           const SizedBox(height: 12),
@@ -110,36 +232,31 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
               Expanded(
                 child: _buildStatItem(
                   'Total Students',
-                  stats['totalStudents'].toString(),
+                  '${stats['totalStudents'] ?? 0}',
                   Icons.people,
                   Colors.blue,
                 ),
               ),
               Expanded(
                 child: _buildStatItem(
-                  'Approved Requests',
-                  stats['totalApprovedRequests'].toString(),
+                  'Total Approvals',
+                  '${stats['totalApprovedRequests'] ?? 0}',
                   Icons.check_circle,
                   Colors.green,
                 ),
               ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
               Expanded(
                 child: _buildStatItem(
                   'Pending Requests',
-                  stats['totalPendingRequests'].toString(),
+                  '${stats['totalPendingRequests'] ?? 0}',
                   Icons.pending,
                   Colors.orange,
                 ),
               ),
               Expanded(
                 child: _buildStatItem(
-                  'Avg. Approval Rate',
-                  '${stats['averageApprovalRate']}%',
+                  'Avg Rate',
+                  '${stats['averageApprovalRate'] ?? 0}%',
                   Icons.trending_up,
                   Colors.purple,
                 ),
@@ -206,8 +323,8 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
                         : '?',
                     style: const TextStyle(
                       color: Colors.white,
+                      fontSize: 20,
                       fontWeight: FontWeight.bold,
-                      fontSize: 18,
                     ),
                   ),
                 ),
@@ -221,39 +338,51 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
                         style: const TextStyle(
                           fontSize: 16,
                           fontWeight: FontWeight.bold,
+                          color: Colors.black87,
                         ),
                       ),
-                      const SizedBox(height: 2),
                       Text(
                         student.email,
                         style: TextStyle(
-                          fontSize: 12,
+                          fontSize: 13,
                           color: Colors.grey[600],
                         ),
                       ),
-                      if (student.rollNo != null && student.rollNo!.isNotEmpty)
+                      if (student.rollNo != null) ...[
+                        const SizedBox(height: 2),
                         Text(
                           'Roll No: ${student.rollNo}',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Colors.grey[600],
+                            color: Colors.grey[500],
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
+                      ],
                     ],
                   ),
                 ),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.end,
                   children: [
-                    Text(
-                      'Joined',
-                      style: TextStyle(
-                        fontSize: 10,
-                        color: Colors.grey[500],
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text(
+                        'Approved',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.green[700],
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                     ),
+                    const SizedBox(height: 4),
                     Text(
-                      _formatDate(student.createdAt),
+                      'Since ${DateFormat('MMM dd').format(student.createdAt)}',
                       style: TextStyle(
                         fontSize: 11,
                         color: Colors.grey[600],
@@ -352,6 +481,32 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
                   );
                 }).toList(),
               ),
+            ] else ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.info_outline,
+                      size: 16,
+                      color: Colors.orange[700],
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      'No teacher information available',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange[700],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ],
         ),
@@ -414,7 +569,7 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
             ),
             const SizedBox(height: 24),
             ElevatedButton.icon(
-              onPressed: _loadData,
+              onPressed: _refreshData,
               icon: const Icon(Icons.refresh),
               label: const Text('Refresh'),
               style: ElevatedButton.styleFrom(
@@ -429,11 +584,50 @@ class _ApprovedStudentsScreenState extends State<ApprovedStudentsScreen> {
     );
   }
 
-  String _formatDate(DateTime date) {
-    final months = [
-      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
-    ];
-    return '${date.day} ${months[date.month - 1]} ${date.year}';
+  Widget _buildNoResultsState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.search_off,
+              size: 80,
+              color: Colors.grey[400],
+            ),
+            const SizedBox(height: 16),
+            Text(
+              'No Results Found',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No students match your search criteria: "$_searchQuery"',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[500],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _clearSearch,
+              icon: const Icon(Icons.clear),
+              label: const Text('Clear Search'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFFFB703),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }

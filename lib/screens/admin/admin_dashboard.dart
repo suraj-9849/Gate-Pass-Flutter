@@ -359,14 +359,6 @@ class _AdminDashboardState extends State<AdminDashboard>
         children: [
           Expanded(
             child: _buildStatItem(
-              'Total Users',
-              userStats['total'].toString(),
-              Icons.people,
-              Colors.blue,
-            ),
-          ),
-          Expanded(
-            child: _buildStatItem(
               'Students',
               userStats['students'].toString(),
               Icons.school,
@@ -972,22 +964,6 @@ class _AdminDashboardState extends State<AdminDashboard>
                                 ),
                               ),
                           ],
-                        ),
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.green.shade100,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Text(
-                          '${student.stats.approvalRate}% approved',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: Colors.green.shade700,
-                            fontWeight: FontWeight.w500,
-                          ),
                         ),
                       ),
                     ],
