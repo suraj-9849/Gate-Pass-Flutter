@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:gate_pass_flutter/utils/email_validator.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/auth_provider.dart';
@@ -13,12 +14,12 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> 
+class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  
+
   late AnimationController _animationController;
   late Animation<Offset> _slideAnimation;
   late Animation<double> _fadeAnimation;
@@ -26,12 +27,12 @@ class _LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
-    
+
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 800),
       vsync: this,
     );
-    
+
     _slideAnimation = Tween<Offset>(
       begin: const Offset(0, 0.3),
       end: Offset.zero,
@@ -39,11 +40,11 @@ class _LoginScreenState extends State<LoginScreen>
       parent: _animationController,
       curve: Curves.easeOutCubic,
     ));
-    
+
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
     );
-    
+
     _animationController.forward();
   }
 
@@ -59,7 +60,7 @@ class _LoginScreenState extends State<LoginScreen>
     if (!_formKey.currentState!.validate()) return;
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
+
     final result = await authProvider.login(
       _emailController.text.trim(),
       _passwordController.text,
@@ -123,7 +124,7 @@ class _LoginScreenState extends State<LoginScreen>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         const SizedBox(height: 60),
-                        
+
                         // Header
                         Column(
                           children: [
@@ -135,7 +136,8 @@ class _LoginScreenState extends State<LoginScreen>
                                 borderRadius: BorderRadius.circular(20),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppTheme.primaryYellow.withOpacity(0.3),
+                                    color:
+                                        AppTheme.primaryYellow.withOpacity(0.3),
                                     blurRadius: 15,
                                     spreadRadius: 2,
                                   ),
@@ -150,24 +152,30 @@ class _LoginScreenState extends State<LoginScreen>
                             const SizedBox(height: 24),
                             Text(
                               'Welcome Back',
-                              style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .displayMedium
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                               textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 8),
                             Text(
                               'Sign in to your account',
-                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                color: AppTheme.textSecondary,
-                              ),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyLarge
+                                  ?.copyWith(
+                                    color: AppTheme.textSecondary,
+                                  ),
                               textAlign: TextAlign.center,
                             ),
                           ],
                         ),
-                        
+
                         const SizedBox(height: 48),
-                        
+
                         // Login Form
                         Card(
                           elevation: 8,
@@ -188,19 +196,9 @@ class _LoginScreenState extends State<LoginScreen>
                                     hintText: 'Enter your email',
                                     keyboardType: TextInputType.emailAddress,
                                     prefixIcon: Icons.email_outlined,
-                                    validator: (value) {
-                                      if (value?.isEmpty ?? true) {
-                                        return 'Please enter your email';
-                                      }
-                                      if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$')
-                                          .hasMatch(value!)) {
-                                        return 'Please enter a valid email';
-                                      }
-                                      return null;
-                                    },
+                                    validator: EmailValidator.validateEmail,
                                   ),
                                   const SizedBox(height: 20),
-                                  
                                   CustomTextField(
                                     controller: _passwordController,
                                     label: 'Password',
@@ -215,12 +213,15 @@ class _LoginScreenState extends State<LoginScreen>
                                     },
                                   ),
                                   const SizedBox(height: 32),
-                                  
                                   Consumer<AuthProvider>(
                                     builder: (context, authProvider, child) {
                                       return CustomButton(
-                                        onPressed: authProvider.isLoading ? null : _handleLogin,
-                                        text: authProvider.isLoading ? 'Signing In...' : 'Sign In',
+                                        onPressed: authProvider.isLoading
+                                            ? null
+                                            : _handleLogin,
+                                        text: authProvider.isLoading
+                                            ? 'Signing In...'
+                                            : 'Sign In',
                                         isLoading: authProvider.isLoading,
                                       );
                                     },
@@ -230,9 +231,9 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                           ),
                         ),
-                        
+
                         const SizedBox(height: 32),
-                        
+
                         // Register Link
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -245,15 +246,18 @@ class _LoginScreenState extends State<LoginScreen>
                               onTap: () => context.go('/register'),
                               child: Text(
                                 'Register as Student',
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: AppTheme.primaryYellow,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: AppTheme.primaryYellow,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                               ),
                             ),
                           ],
                         ),
-                        
+
                         const SizedBox(height: 40),
                       ],
                     ),

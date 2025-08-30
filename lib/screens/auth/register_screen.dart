@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:gate_pass_flutter/utils/email_validator.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/auth_provider.dart';
@@ -29,12 +30,12 @@ class _RegisterScreenState extends State<RegisterScreen>
   @override
   void initState() {
     super.initState();
-    
+
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
     );
-    
+
     _slideAnimation = Tween<Offset>(
       begin: const Offset(0, 0.3),
       end: Offset.zero,
@@ -42,11 +43,11 @@ class _RegisterScreenState extends State<RegisterScreen>
       parent: _animationController,
       curve: Curves.easeOutCubic,
     ));
-    
+
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
     );
-    
+
     _animationController.forward();
   }
 
@@ -75,7 +76,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     }
 
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    
+
     final result = await authProvider.register(
       name: _nameController.text.trim(),
       email: _emailController.text.trim(),
@@ -88,10 +89,11 @@ class _RegisterScreenState extends State<RegisterScreen>
     if (result.isSuccess) {
       // Navigate to student dashboard after successful registration
       context.go('/student');
-      
+
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Registration successful! Welcome to Gate Pass System.'),
+          content:
+              Text('Registration successful! Welcome to Gate Pass System.'),
           backgroundColor: AppTheme.success,
         ),
       );
@@ -133,7 +135,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         const SizedBox(height: 40),
-                        
+
                         // Header
                         Column(
                           children: [
@@ -145,7 +147,8 @@ class _RegisterScreenState extends State<RegisterScreen>
                                 borderRadius: BorderRadius.circular(20),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: AppTheme.primaryYellow.withOpacity(0.3),
+                                    color:
+                                        AppTheme.primaryYellow.withOpacity(0.3),
                                     blurRadius: 15,
                                     spreadRadius: 2,
                                   ),
@@ -160,24 +163,30 @@ class _RegisterScreenState extends State<RegisterScreen>
                             const SizedBox(height: 24),
                             Text(
                               'Create Student Account',
-                              style: Theme.of(context).textTheme.displayMedium?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .displayMedium
+                                  ?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
                               textAlign: TextAlign.center,
                             ),
                             const SizedBox(height: 8),
                             Text(
                               'Join as a student and start requesting gate passes',
-                              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                                color: AppTheme.textSecondary,
-                              ),
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyLarge
+                                  ?.copyWith(
+                                    color: AppTheme.textSecondary,
+                                  ),
                               textAlign: TextAlign.center,
                             ),
                           ],
                         ),
-                        
+
                         const SizedBox(height: 40),
-                        
+
                         // Registration Form
                         Card(
                           elevation: 8,
@@ -208,7 +217,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                                     },
                                   ),
                                   const SizedBox(height: 20),
-                                  
                                   CustomTextField(
                                     controller: _rollNoController,
                                     label: 'Roll Number',
@@ -222,26 +230,16 @@ class _RegisterScreenState extends State<RegisterScreen>
                                     },
                                   ),
                                   const SizedBox(height: 20),
-                                  
                                   CustomTextField(
                                     controller: _emailController,
                                     label: 'Email Address',
                                     hintText: 'Enter your email address',
                                     keyboardType: TextInputType.emailAddress,
                                     prefixIcon: Icons.email_outlined,
-                                    validator: (value) {
-                                      if (value?.isEmpty ?? true) {
-                                        return 'Please enter your email';
-                                      }
-                                      if (!RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$')
-                                          .hasMatch(value!)) {
-                                        return 'Please enter a valid email';
-                                      }
-                                      return null;
-                                    },
+                                    validator: EmailValidator
+                                        .validateEmail, // Use the new validator
                                   ),
                                   const SizedBox(height: 20),
-                                  
                                   CustomTextField(
                                     controller: _passwordController,
                                     label: 'Password',
@@ -259,7 +257,6 @@ class _RegisterScreenState extends State<RegisterScreen>
                                     },
                                   ),
                                   const SizedBox(height: 20),
-                                  
                                   CustomTextField(
                                     controller: _confirmPasswordController,
                                     label: 'Confirm Password',
@@ -277,15 +274,14 @@ class _RegisterScreenState extends State<RegisterScreen>
                                     },
                                   ),
                                   const SizedBox(height: 32),
-                                  
                                   Consumer<AuthProvider>(
                                     builder: (context, authProvider, child) {
                                       return CustomButton(
-                                        onPressed: authProvider.isLoading 
-                                            ? null 
+                                        onPressed: authProvider.isLoading
+                                            ? null
                                             : _handleRegister,
-                                        text: authProvider.isLoading 
-                                            ? 'Creating Account...' 
+                                        text: authProvider.isLoading
+                                            ? 'Creating Account...'
                                             : 'Create Account',
                                         isLoading: authProvider.isLoading,
                                       );
@@ -296,9 +292,9 @@ class _RegisterScreenState extends State<RegisterScreen>
                             ),
                           ),
                         ),
-                        
+
                         const SizedBox(height: 32),
-                        
+
                         // Login Link
                         Row(
                           mainAxisAlignment: MainAxisAlignment.center,
@@ -311,17 +307,20 @@ class _RegisterScreenState extends State<RegisterScreen>
                               onTap: () => context.go('/login'),
                               child: Text(
                                 'Sign In',
-                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                  color: AppTheme.primaryYellow,
-                                  fontWeight: FontWeight.w600,
-                                ),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: AppTheme.primaryYellow,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                               ),
                             ),
                           ],
                         ),
-                        
+
                         const SizedBox(height: 32),
-                        
+
                         // Info Card
                         Container(
                           padding: const EdgeInsets.all(16),
@@ -344,24 +343,30 @@ class _RegisterScreenState extends State<RegisterScreen>
                                   const SizedBox(width: 8),
                                   Text(
                                     'Student Registration Info',
-                                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                                      fontWeight: FontWeight.w600,
-                                      color: AppTheme.primaryYellow,
-                                    ),
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w600,
+                                          color: AppTheme.primaryYellow,
+                                        ),
                                   ),
                                 ],
                               ),
                               const SizedBox(height: 8),
                               Text(
                                 'As a student, you can immediately start requesting gate passes from approved teachers. Admin manages teacher and security accounts.',
-                                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                  color: AppTheme.textSecondary,
-                                ),
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: AppTheme.textSecondary,
+                                    ),
                               ),
                             ],
                           ),
                         ),
-                        
+
                         const SizedBox(height: 40),
                       ],
                     ),

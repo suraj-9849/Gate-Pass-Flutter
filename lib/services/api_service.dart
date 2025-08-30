@@ -1,12 +1,9 @@
-// lib/services/api_service.dart
-
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 
 class ApiService {
   static const String baseUrl =
-      'https://gate-pass-backend-1ijb.onrender.com/api'; // Change this to your backend URL
-
+      'https://gate-pass-backend-1ijb.onrender.com/api';
   late Dio _dio;
 
   ApiService() {

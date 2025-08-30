@@ -1,9 +1,9 @@
 #!/bin/bash
 
-echo "íº€ Setting up Gate Pass Flutter App..."
+echo "ï¿½ï¿½ï¿½ Setting up Gate Pass Flutter App..."
 
 # Create directories
-echo "í³ Creating directories..."
+echo "ï¿½ï¿½ï¿½ Creating directories..."
 mkdir -p lib/models
 mkdir -p lib/providers  
 mkdir -p lib/screens/auth
@@ -17,7 +17,7 @@ mkdir -p lib/widgets
 mkdir -p assets/{images,icons,fonts}
 
 # Create all Dart files
-echo "í³„ Creating Dart files..."
+echo "ï¿½ï¿½ï¿½ Creating Dart files..."
 touch lib/main.dart
 touch lib/models/{user_model.dart,gate_pass_model.dart}
 touch lib/providers/{auth_provider.dart,gate_pass_provider.dart}
@@ -32,6 +32,6 @@ touch lib/utils/theme.dart
 touch lib/widgets/{custom_button.dart,custom_text_field.dart}
 touch README.md
 
-echo "âœ… File structure created!"
-echo "í³ Now copy the content from each artifact into the corresponding files."
-echo "í¾¯ Don't forget to replace pubspec.yaml and AndroidManifest.xml content!"
+echo "File structure created!"
+echo "ï¿½ï¿½ï¿½ Now copy the content from each artifact into the corresponding files."
+echo "ï¿½ï¿½ï¿½ Don't forget to replace pubspec.yaml and AndroidManifest.xml content!"
