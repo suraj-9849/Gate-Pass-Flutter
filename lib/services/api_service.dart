@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 
 class ApiService {
   static const String baseUrl =
-      'http://192.168.1.9:3001/api'; // Change this to your backend URL
+      'https://gate-pass-backend-1ijb.onrender.com/api'; // Change this to your backend URL
 
   late Dio _dio;
 
