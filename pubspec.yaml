@@ -49,28 +49,27 @@ dependencies:
   # Google Fonts for Poppins font family
   google_fonts: ^6.1.0
 
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  # ADD THIS: App icon generator
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
   
-  # Assets (create these directories if you want to add assets later)
-  # assets:
-  #   - assets/images/
-  #   - assets/icons/
-  
-  # Custom fonts (add font files to assets/fonts/ if you want custom fonts)
-  # fonts:
-  #   - family: Inter
-  #     fonts:
-  #       - asset: assets/fonts/Inter-Regular.ttf
-  #       - asset: assets/fonts/Inter-Medium.ttf
-  #         weight: 500
-  #       - asset: assets/fonts/Inter-SemiBold.ttf
-  #         weight: 600
-  #       - asset: assets/fonts/Inter-Bold.ttf
-  #         weight: 700
+  # FIXED: Enabled assets - removed comment markers
+  assets:
+    - assets/images/
+    - assets/icons/
+
+# MOVED TO CORRECT LOCATION: App icon configuration (at root level, not under flutter:)
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/images/logo.png"
+  min_sdk_android: 21
+  # Optional: Create adaptive icon for Android (recommended)
+  adaptive_icon_background: "#FFB703"  # Your app's yellow color
+  adaptive_icon_foreground: "assets/images/logo.png"
