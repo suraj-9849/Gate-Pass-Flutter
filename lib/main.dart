@@ -2,17 +2,17 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart'; // Add this import
+import 'package:google_fonts/google_fonts.dart';
 import 'providers/auth_provider.dart';
 import 'providers/gate_pass_provider.dart';
-import 'providers/admin_provider.dart'; // Add this import
+import 'providers/admin_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/auth/login_screen.dart';
 import 'screens/auth/register_screen.dart';
 import 'screens/student/student_dashboard.dart';
 import 'screens/teacher/teacher_dashboard.dart';
 import 'screens/admin/admin_dashboard.dart';
-import 'screens/admin/approved_students_screen.dart'; // Add this import
+import 'screens/admin/approved_students_screen.dart';
 import 'screens/security/security_dashboard.dart';
 import 'utils/theme.dart';
 
@@ -29,18 +29,16 @@ class MyApp extends StatelessWidget {
       providers: [
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => GatePassProvider()),
-        ChangeNotifierProvider(create: (_) => AdminProvider()), // Add this line
+        ChangeNotifierProvider(create: (_) => AdminProvider()),
       ],
       child: Consumer<AuthProvider>(
         builder: (context, authProvider, child) {
           return MaterialApp.router(
             title: 'Gate Pass Management',
             theme: AppTheme.lightTheme.copyWith(
-              // Override the theme with Poppins font family
               textTheme: GoogleFonts.poppinsTextTheme(
                 AppTheme.lightTheme.textTheme,
               ),
-              // Also apply to primary text theme for consistency
               primaryTextTheme: GoogleFonts.poppinsTextTheme(
                 AppTheme.lightTheme.primaryTextTheme,
               ),
@@ -56,21 +54,39 @@ class MyApp extends StatelessWidget {
   GoRouter _createRouter(AuthProvider authProvider) {
     return GoRouter(
       initialLocation: '/splash',
+      // Disable automatic redirects during auth operations
       redirect: (context, state) {
+        // Don't redirect while loading or not initialized
+        if (!authProvider.isInitialized) {
+          return null; // Stay on current route
+        }
+
+        final location = state.matchedLocation;
         final isLoggedIn = authProvider.isLoggedIn;
-        final user = authProvider.user;
+
+        debugPrint('Router redirect - Location: $location, LoggedIn: $isLoggedIn, Loading: ${authProvider.isLoading}');
+
+        // If we're loading, don't redirect
+        if (authProvider.isLoading) {
+          return null;
+        }
 
         // If not logged in and trying to access protected route
-        if (!isLoggedIn && !_isPublicRoute(state.matchedLocation)) {
-          return '/login';
+        if (!isLoggedIn && _isProtectedRoute(location)) {
+          if (location != '/login') {
+            debugPrint('Redirecting to login from protected route: $location');
+            return '/login';
+          }
         }
 
-        // If logged in and trying to access auth routes
-        if (isLoggedIn && _isAuthRoute(state.matchedLocation)) {
-          return _getDashboardRoute(user?.role ?? 'STUDENT');
+        // If logged in and on auth routes, redirect to dashboard
+        if (isLoggedIn && _isAuthRoute(location)) {
+          final dashboardRoute = _getDashboardRoute(authProvider.user?.role ?? 'STUDENT');
+          debugPrint('Redirecting logged in user from $location to $dashboardRoute');
+          return dashboardRoute;
         }
 
-        return null;
+        return null; // No redirect needed
       },
       routes: [
         // Public routes
@@ -112,12 +128,21 @@ class MyApp extends StatelessWidget {
     );
   }
 
-  bool _isPublicRoute(String route) {
-    return ['/splash', '/login', '/register'].contains(route);
+  bool _isProtectedRoute(String route) {
+    const protectedRoutes = [
+      '/student',
+      '/teacher', 
+      '/admin',
+      '/security',
+    ];
+    
+    return protectedRoutes.any((protectedRoute) => 
+      route.startsWith(protectedRoute)
+    );
   }
 
   bool _isAuthRoute(String route) {
-    return ['/login', '/register', '/splash'].contains(route);
+    return ['/login', '/register'].contains(route);
   }
 
   String _getDashboardRoute(String role) {

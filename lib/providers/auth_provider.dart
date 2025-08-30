@@ -32,8 +32,10 @@ class AuthProvider extends ChangeNotifier {
         _token = tokenData;
         _user = User.fromJson(jsonDecode(userData));
         _apiService.setToken(_token!);
+        debugPrint('Auth initialized - User: ${_user?.email}, Role: ${_user?.role}');
       }
     } catch (e) {
+      debugPrint('Error initializing auth: $e');
       await _clearAuthData();
     } finally {
       _isInitialized = true;
@@ -42,6 +44,7 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<AuthResult> login(String email, String password) async {
+    debugPrint('Starting login for: $email');
     _setLoading(true);
     
     try {
@@ -50,6 +53,8 @@ class AuthProvider extends ChangeNotifier {
         'password': password,
       });
 
+      debugPrint('Login response received: ${response.toString()}');
+
       if (response['token'] != null && response['user'] != null) {
         _token = response['token'];
         _user = User.fromJson(response['user']);
@@ -57,21 +62,16 @@ class AuthProvider extends ChangeNotifier {
         await _saveAuthData();
         _apiService.setToken(_token!);
         
+        debugPrint('Login successful - User: ${_user?.name}, Role: ${_user?.role}');
         notifyListeners();
         return AuthResult.success('Login successful');
       } else {
+        debugPrint('Invalid response structure: $response');
         return AuthResult.error('Invalid response from server');
       }
     } catch (e) {
-      String errorMessage = e.toString();
-      if (errorMessage.contains('User not found')) {
-        errorMessage = 'No account found with this email address.';
-      } else if (errorMessage.contains('Invalid password')) {
-        errorMessage = 'Incorrect password. Please try again.';
-      } else if (errorMessage.contains('Network error')) {
-        errorMessage = 'Unable to connect to server. Please check your internet connection.';
-      }
-      
+      debugPrint('Login error: $e');
+      String errorMessage = _parseErrorMessage(e.toString());
       return AuthResult.error(errorMessage);
     } finally {
       _setLoading(false);
@@ -84,6 +84,7 @@ class AuthProvider extends ChangeNotifier {
     required String rollNo,
     required String password,
   }) async {
+    debugPrint('Starting registration for: $email');
     _setLoading(true);
     
     try {
@@ -94,6 +95,8 @@ class AuthProvider extends ChangeNotifier {
         'password': password,
       });
 
+      debugPrint('Registration response received: ${response.toString()}');
+
       if (response['token'] != null && response['user'] != null) {
         _token = response['token'];
         _user = User.fromJson(response['user']);
@@ -101,19 +104,16 @@ class AuthProvider extends ChangeNotifier {
         await _saveAuthData();
         _apiService.setToken(_token!);
         
+        debugPrint('Registration successful - User: ${_user?.name}, Role: ${_user?.role}');
         notifyListeners();
         return AuthResult.success('Registration successful');
       } else {
+        debugPrint('Invalid response structure: $response');
         return AuthResult.error('Invalid response from server');
       }
     } catch (e) {
-      String errorMessage = e.toString();
-      if (errorMessage.contains('User already exists')) {
-        errorMessage = 'An account with this email already exists.';
-      } else if (errorMessage.contains('Network error')) {
-        errorMessage = 'Unable to connect to server. Please check your internet connection.';
-      }
-      
+      debugPrint('Registration error: $e');
+      String errorMessage = _parseErrorMessage(e.toString());
       return AuthResult.error(errorMessage);
     } finally {
       _setLoading(false);
@@ -121,9 +121,11 @@ class AuthProvider extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    debugPrint('Logging out user: ${_user?.email}');
     try {
       await _clearAuthData();
     } catch (e) {
+      debugPrint('Error during logout: $e');
       _token = null;
       _user = null;
       _apiService.clearToken();
@@ -137,8 +139,9 @@ class AuthProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString('auth_token', _token!);
       await prefs.setString('user_data', jsonEncode(_user!.toJson()));
+      debugPrint('Auth data saved successfully');
     } catch (e) {
-      // Handle save error silently
+      debugPrint('Error saving auth data: $e');
     }
   }
 
@@ -147,8 +150,9 @@ class AuthProvider extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       await prefs.remove('auth_token');
       await prefs.remove('user_data');
+      debugPrint('Auth data cleared successfully');
     } catch (e) {
-      // Handle clear error silently
+      debugPrint('Error clearing auth data: $e');
     }
 
     _token = null;
@@ -173,8 +177,40 @@ class AuthProvider extends ChangeNotifier {
     try {
       ensureTokenSet();
     } catch (e) {
-      // Handle refresh error silently
+      debugPrint('Error refreshing user: $e');
     }
+  }
+
+  String _parseErrorMessage(String errorString) {
+    debugPrint('Parsing error: $errorString');
+    
+    // Remove "ApiException: " prefix if present
+    String cleanError = errorString.replaceAll('ApiException: ', '');
+    
+    // Check for specific error patterns
+    if (cleanError.contains('User not found') || cleanError.contains('No account found')) {
+      return 'No account found with this email address.';
+    } else if (cleanError.contains('Invalid password') || cleanError.contains('Incorrect password')) {
+      return 'Incorrect password. Please try again.';
+    } else if (cleanError.contains('User already exists') || cleanError.contains('already exists')) {
+      return 'An account with this email already exists.';
+    } else if (cleanError.contains('Email must end with')) {
+      return cleanError; // Return the exact email domain error
+    } else if (cleanError.contains('Connection timeout') || cleanError.contains('timeout')) {
+      return 'Connection timeout. Please check your internet connection.';
+    } else if (cleanError.contains('No internet') || cleanError.contains('SocketException')) {
+      return 'No internet connection. Please check your network.';
+    } else if (cleanError.contains('Server error') || cleanError.contains('500')) {
+      return 'Server error. Please try again later.';
+    } else if (cleanError.contains('Network error')) {
+      return 'Network error. Please check your connection.';
+    } else if (cleanError.toLowerCase().contains('email') && cleanError.toLowerCase().contains('valid')) {
+      return cleanError; // Return email validation errors as-is
+    } else if (cleanError.trim().isEmpty) {
+      return 'An unexpected error occurred. Please try again.';
+    }
+    
+    return cleanError.length > 100 ? 'An error occurred. Please try again.' : cleanError;
   }
 }
 
